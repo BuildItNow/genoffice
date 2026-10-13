@@ -16,6 +16,11 @@ export interface ControlHost {
   findTab(path: string): { id: string; kind: TabKind; webContents: WebContents } | undefined
   /** ms to keep asking a renderer that has not loaded its document yet */
   readyTimeoutMs?: number
+  /**
+   * Where the app's built-in MCP server is (the `mcp` control command). Absent
+   * only in tests that never probe for it.
+   */
+  mcp?: () => { enabled: boolean; running: boolean; port: number }
 }
 
 const TARGET_KIND_BY_TAB: Partial<Record<TabKind, ControlTarget['kind']>> = {
@@ -33,6 +38,11 @@ const TARGET_KIND_BY_TAB: Partial<Record<TabKind, ControlTarget['kind']>> = {
  */
 export function controlHandler(host: ControlHost): (req: ControlRequest) => Promise<ControlReply> {
   return async (req) => {
+    // the mcp probe carries no path; it only reports the built-in server's port
+    if (req.cmd === 'mcp') {
+      if (!host.mcp) return fail('unsupported', 'this build has no built-in MCP server')
+      return { ok: true, result: { ...host.mcp() } }
+    }
     if (!existsSync(req.path)) {
       return fail('file_not_found', `file not found: ${req.path}`)
     }

@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { defaultRegistry } from '../src/cli'
 import { DECK_TOOLS } from '../src/mcp/deck'
@@ -9,7 +10,7 @@ import { loadCatalog } from '../src/commands/guide'
 import type { GuideDomain } from '../src/op-catalog'
 import { forbiddenConstructs } from '../src/mcp/op-schemas'
 import { createContext, disposeContext, runJson, type McpContext } from '../src/mcp/run'
-import { createMcpServer } from '../src/mcp/server'
+import { createMcpServer, registerCliTools } from '../src/mcp/server'
 import {
   buildArgv,
   resolveTool,
@@ -353,6 +354,36 @@ describe('mcp server', () => {
       expect(props.ops!.anyOf!.map((v) => v.type)).toEqual(['array', 'object'])
       expect(props.ops!.items).toBeUndefined()
       expect(JSON.stringify(tools).length).toBeLessThan(40 * 1024)
+    } finally {
+      await client2.close()
+      disposeContext(ctx2)
+    }
+  })
+
+  it('leaves omitted tools unregistered, keeping the rest', async () => {
+    const ctx2 = createContext({
+      cwd: dir,
+      env: { ...process.env, GENOFFICE_AUDIT_LOG: 'off' },
+      log: () => {},
+    })
+    const server = new McpServer({ name: 'omit-test', version: '0' })
+    await registerCliTools(server, ctx2, {
+      registry,
+      omit: ['search', 'image', 'media', 'capabilities'],
+    })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    await server.connect(a)
+    const client2 = new Client({ name: 'omit', version: '0' })
+    await client2.connect(b)
+    try {
+      const names = (await client2.listTools()).tools.map((t) => t.name)
+      for (const cloud of ['search', 'image', 'media', 'capabilities']) {
+        expect(names).not.toContain(cloud)
+      }
+      // the rest of the surface is untouched
+      expect(names).toContain('info')
+      expect(names).toContain('docs_read')
+      expect(names).toContain('deck_start')
     } finally {
       await client2.close()
       disposeContext(ctx2)

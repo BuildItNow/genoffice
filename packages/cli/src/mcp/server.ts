@@ -85,25 +85,48 @@ export interface ServerOptions {
   compactSchemas?: boolean
 }
 
+export interface RegisterCliToolsOptions {
+  registry?: CommandRegistry
+  /** advertise ops / cells / data as untyped `array | object` instead of the per-op schema */
+  compactSchemas?: boolean
+  /**
+   * Namespace every tool (and guide resource) name with this prefix. The daemon
+   * exposes `office_cli_*` and `office_gui_*` families side by side, so a plain
+   * `genoffice mcp` server leaves it empty.
+   */
+  namePrefix?: string
+  /**
+   * Tool names to leave unregistered. A host that must not offer a capability
+   * passes them here (the daemon drops the cloud commands, whose work leaves the
+   * machine); a plain `genoffice mcp` server omits nothing.
+   */
+  omit?: readonly string[]
+}
+
 let typedSchemas: Promise<TypedSchemas> | undefined
 
-export async function createMcpServer(
+/**
+ * Registers the whole CLI tool surface on `server`: every command tool, the
+ * deck-staging tools and the `genoffice://guide/*` resources. Exported so a
+ * wrapper (the daemon) can mount the same tools under a name prefix inside a
+ * server it builds itself.
+ */
+export async function registerCliTools(
+  server: McpServer,
   ctx: McpContext,
-  opts: ServerOptions = {},
-): Promise<McpServer> {
+  opts: RegisterCliToolsOptions = {},
+): Promise<void> {
   const registry = opts.registry ?? defaultRegistry()
   const remote = ctx.mode === 'http'
   const typed = opts.compactSchemas ? undefined : await (typedSchemas ??= loadTypedSchemas())
-  const server = new McpServer(
-    { name: 'genoffice', version: VERSION },
-    { instructions: remote ? remoteInstructions(ctx.baseUrl ?? '') : INSTRUCTIONS },
-  )
+  const prefix = opts.namePrefix ?? ''
 
   for (const tool of resolveTools(registry)) {
+    if (opts.omit?.includes(tool.name)) continue
     // there is no GenOffice window in front of a remote client
     if (remote && tool.localOnly) continue
     server.registerTool(
-      tool.name,
+      prefix + tool.name,
       {
         description: tool.description,
         inputSchema: toolShape(tool, ctx.mode, typed),
@@ -121,7 +144,7 @@ export async function createMcpServer(
 
   for (const tool of DECK_TOOLS) {
     server.registerTool(
-      tool.name,
+      prefix + tool.name,
       {
         description: tool.description,
         inputSchema: tool.shape,
@@ -134,7 +157,7 @@ export async function createMcpServer(
 
   for (const g of GUIDES) {
     server.registerResource(
-      g.name,
+      prefix + g.name,
       g.uri,
       { description: g.description, mimeType: 'text/plain' },
       async (uri) => {
@@ -144,6 +167,21 @@ export async function createMcpServer(
       },
     )
   }
+}
+
+export async function createMcpServer(
+  ctx: McpContext,
+  opts: ServerOptions = {},
+): Promise<McpServer> {
+  const remote = ctx.mode === 'http'
+  const server = new McpServer(
+    { name: 'genoffice', version: VERSION },
+    { instructions: remote ? remoteInstructions(ctx.baseUrl ?? '') : INSTRUCTIONS },
+  )
+  await registerCliTools(server, ctx, {
+    registry: opts.registry,
+    compactSchemas: opts.compactSchemas,
+  })
   return server
 }
 
@@ -221,3 +259,9 @@ export async function serveStdio(opts: ServeOptions): Promise<void> {
     disposeContext(ctx)
   }
 }
+
+// re-exported so a wrapper server (the daemon) can build a context and mount the
+// CLI tools itself without reaching into the package's internals
+export { createContext, disposeContext } from './run'
+export type { McpContext, Outcome } from './run'
+export type { TypedSchemas } from './op-schemas'
