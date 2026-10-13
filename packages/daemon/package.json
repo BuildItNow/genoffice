@@ -1,0 +1,33 @@
+{
+  "name": "@genoffice/daemon",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "genoffice-daemon: a Model Context Protocol server that stays up when the GenOffice app is closed. It serves the headless office_cli_* tools locally and proxies the app's office_gui_* tools, starting the app on demand.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./gui-tools": "./src/gui-tools.ts"
+  },
+  "bin": {
+    "office-daemon": "./bin/office-daemon"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@genoffice/cli": "*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

@@ -27,7 +27,13 @@ export type ControlTarget =
   | { kind: 'page'; page: number }
 
 export type ControlRequest =
-  { cmd: 'open'; path: string; target?: ControlTarget } | { cmd: 'selection'; path: string }
+  | { cmd: 'open'; path: string; target?: ControlTarget }
+  | { cmd: 'selection'; path: string }
+  /**
+   * Where the app's built-in MCP server is listening, so an out-of-process MCP
+   * daemon can reach it. Read-only: answers `{ enabled, running, port }`.
+   */
+  | { cmd: 'mcp' }
 
 export interface ControlEnvelope {
   token: string

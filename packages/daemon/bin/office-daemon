@@ -1,0 +1,27 @@
+#!/bin/sh
+# office-daemon launcher: the MCP server that outlives the GenOffice app.
+#
+# In a dev checkout it runs the local build output (dist/office-daemon.cjs) on
+# the system node; GENOFFICE_NODE overrides the interpreter (a packaged app runs
+# it on its bundled Node via ELECTRON_RUN_AS_NODE). Usually reached through a
+# symlink on the PATH, so the real location is resolved first.
+self="$0"
+while [ -L "$self" ]; do
+  target=$(readlink "$self")
+  case "$target" in
+    /*) self="$target" ;;
+    *) self="$(dirname "$self")/$target" ;;
+  esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+
+bundle="$here/../dist/office-daemon.cjs"
+if [ ! -f "$bundle" ]; then
+  echo "office-daemon: not built yet — run: npm run build -w @genoffice/daemon" >&2
+  exit 1
+fi
+
+if [ -n "$GENOFFICE_NODE" ]; then
+  exec "$GENOFFICE_NODE" "$bundle" "$@"
+fi
+exec node "$bundle" "$@"

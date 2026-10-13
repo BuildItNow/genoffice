@@ -19,6 +19,18 @@ export function genofficeUserDataDir(env: NodeJS.ProcessEnv): string {
   return join(base, 'GenOffice')
 }
 
+/**
+ * Every userData directory a live shell might be using, most likely first: the
+ * packaged profile ("GenOffice"), the current dev profile ("GenOffice-Dev",
+ * genoffice#1817) and the old dev profile ("GenOffice Dev"), so a CLI finds
+ * whichever shell is running. GENOFFICE_USER_DATA pins one exactly.
+ */
+export function genofficeUserDataDirs(env: NodeJS.ProcessEnv): string[] {
+  if (env.GENOFFICE_USER_DATA) return [env.GENOFFICE_USER_DATA]
+  const base = genofficeUserDataDir(env)
+  return [base, `${base}-Dev`, `${base} Dev`]
+}
+
 export interface GuiOpenDocuments {
   pid: number
   paths: string[]
@@ -31,9 +43,7 @@ export interface GuiOpenDocuments {
  */
 export function guiOpenDocuments(
   env: NodeJS.ProcessEnv,
-  dirs = env.GENOFFICE_USER_DATA
-    ? [env.GENOFFICE_USER_DATA]
-    : [genofficeUserDataDir(env), `${genofficeUserDataDir(env)} Dev`],
+  dirs = genofficeUserDataDirs(env),
 ): GuiOpenDocuments[] {
   const live: GuiOpenDocuments[] = []
   for (const dir of dirs) {

@@ -624,11 +624,20 @@ function currentAutoSaveDefault(): AutoSaveDefault {
 }
 
 /** MCP server settings (persisted in userData/app-settings.json; default off). */
+/**
+ * The MCP daemon sets GENOFFICE_MCP_FORCE=1 when it launches the app, so the
+ * app's built-in server comes up even when the saved setting is off — otherwise
+ * the daemon's `office_gui_*` tools would have nothing to proxy to.
+ */
+function mcpForcedOn(): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env.GENOFFICE_MCP_FORCE?.trim() ?? '')
+}
+
 function currentMcpSettings(): McpSettings {
   const saved = readAppSettings(APP_SETTINGS_PATH())
   const port = saved.mcpPort
   return {
-    enabled: saved.mcpEnabled === true,
+    enabled: saved.mcpEnabled === true || mcpForcedOn(),
     port:
       typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536
         ? port
@@ -6808,7 +6817,14 @@ app.whenReady().then(async () => {
   configureMcpRuntime({
     version: app.getVersion(),
     defaultSaveDir: () => defaultSaveDir(),
-    openPath: (filePath) => routeDocumentPath(filePath),
+    // macOS keeps the process alive after the last window closes, which nulls the
+    // tab manager; a GUI open must recreate the shell first (exactly as the
+    // control channel's `open` does with reveal()), or routeDocumentPath finds no
+    // tab manager and reports the file unopenable.
+    openPath: (filePath) => {
+      revealShellWindow()
+      return routeDocumentPath(filePath)
+    },
     docsControl: mcpDocsControl,
     slidesControl: mcpSlidesControl,
     sheetsControl: mcpSheetsControl,
@@ -6902,6 +6918,9 @@ app.whenReady().then(async () => {
         if (!activateDetached(id)) tabManager?.activateTab(id)
       },
       findTab: (path) => tabManager?.findTabByPath(path) ?? findDetachedTabByPath(path),
+      // the mcp probe: an out-of-process daemon asks where the built-in server
+      // is, so its office_gui_* tools can proxy to this app
+      mcp: () => mcpStatus(),
     }),
   ).then(
     (server) => {

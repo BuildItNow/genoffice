@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseArgs } from '../src/args'
 import { parseTarget } from '../src/commands/open'
+import { genofficeUserDataDir } from '../src/gui'
 import { controlEndpoint, controlRequest } from '../src/control'
 import type { ControlReply } from '../src/control-protocol'
 import { CliError } from '../src/result'
@@ -108,6 +109,19 @@ describe('control endpoint', () => {
       pid: process.pid,
       token: 't',
     })
+  })
+
+  it('finds the endpoint a dev shell published in the hyphenated GenOffice-Dev profile', () => {
+    const appRoot = mkdtempSync(join(tmpdir(), 'genoffice-home-'))
+    const env: NodeJS.ProcessEnv = { APPDATA: appRoot, HOME: appRoot, XDG_CONFIG_HOME: appRoot }
+    // a dev shell renames userData to "GenOffice-Dev" (genoffice#1817)
+    const devDir = `${genofficeUserDataDir(env)}-Dev`
+    mkdirSync(devDir, { recursive: true })
+    writeFileSync(
+      join(devDir, 'control.json'),
+      JSON.stringify({ protocol: 1, pid: process.pid, endpoint: '/sock', token: 't' }),
+    )
+    expect(controlEndpoint(env)).toMatchObject({ pid: process.pid, token: 't' })
   })
 
   it('fails with app_unavailable when nobody listens', async () => {

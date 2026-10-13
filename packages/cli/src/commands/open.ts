@@ -1,11 +1,10 @@
-import { spawn } from 'node:child_process'
 import { extname } from 'node:path'
 import { flagString, type ParsedArgs } from '../args'
+import { spawnApp } from '../app-launch'
 import { controlEndpoint, controlRequest, waitForControlEndpoint } from '../control'
 import type { ControlTarget } from '../control-protocol'
 import { resolveInput } from '../fs'
-import type { CommandContext, CommandDef } from '../registry'
-import { appLaunch } from '../resources'
+import type { CommandDef } from '../registry'
 import { CliError, EXIT } from '../result'
 
 const APP_START_TIMEOUT_MS = 45_000
@@ -42,7 +41,7 @@ export const openCommand: CommandDef = {
     const target = parseTarget(args, path)
     let endpoint = controlEndpoint(ctx.env)
     if (!endpoint) {
-      const launch = await spawnApp(path, ctx)
+      const launch = await spawnApp({ env: ctx.env, path })
       if (!target) return { summary: `opening ${path} in GenOffice`, detail: { app: launch } }
       endpoint = await waitForControlEndpoint(ctx.env, APP_START_TIMEOUT_MS)
       if (!endpoint) {
@@ -69,30 +68,6 @@ export const openCommand: CommandDef = {
       detail: { ...result, gui_pid: endpoint.pid },
     }
   },
-}
-
-async function spawnApp(path: string, ctx: CommandContext): Promise<string> {
-  const launch = appLaunch(ctx.env)
-  if (!launch) {
-    throw new CliError(EXIT.app, 'GenOffice app not found', { hint: 'set GENOFFICE_APP_BIN' })
-  }
-  const env = { ...ctx.env }
-  delete env.ELECTRON_RUN_AS_NODE
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(launch.command, [...launch.args, path], {
-      detached: true,
-      stdio: 'ignore',
-      env,
-    })
-    child.once('error', (err) =>
-      reject(new CliError(EXIT.app, `failed to start GenOffice: ${err.message}`)),
-    )
-    child.once('spawn', () => {
-      child.unref()
-      resolve()
-    })
-  })
-  return launch.command
 }
 
 const TARGET_FLAGS = ['slide', 'el', 'block', 'range', 'sheet', 'page'] as const
