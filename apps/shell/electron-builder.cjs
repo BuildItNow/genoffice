@@ -213,6 +213,7 @@ function assertModuleTreesPresent() {
     '../html/out',
     '../../packages/cli/dist/genoffice.cjs',
     '../../packages/cli/dist/node_modules/jsdom',
+    '../../packages/daemon/dist/office-daemon.cjs',
   ]) {
     if (!existsSync(join(__dirname, rel))) {
       throw new Error(
@@ -536,6 +537,14 @@ const config = {
     {
       from: '../../packages/cli/bin/genoffice.cmd',
       to: 'cli/genoffice.cmd',
+    },
+    // office-daemon: the MCP server that outlives the app. Reached through the
+    // genoffice command (`genoffice daemon`) rather than a command of its own,
+    // so only the bundle ships — packages/cli/src/resources.ts resolves it at
+    // Resources/cli/office-daemon.cjs.
+    {
+      from: '../../packages/daemon/dist/office-daemon.cjs',
+      to: 'cli/office-daemon.cjs',
     },
     // the CLI's version (Settings → Integrations shows it) and the agent skill
     // the same pane installs into Claude Code / Codex / …; bytes identical to the repo file
