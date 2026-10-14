@@ -224,6 +224,7 @@ describe('mcp bridge sheet addressing', () => {
       context: () => ({}),
       readCells: () => ({}),
       readRange: () => ({}),
+      findCells: () => ({ matches: [], truncated: false, incompleteSheets: [] }),
       sheets: () => SHEETS,
       focusSheet: vi.fn(),
       applyOps: vi.fn().mockResolvedValue({ ok: true }),

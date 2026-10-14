@@ -5,7 +5,13 @@ import {
   workbookOperationSchema,
   type WorkbookOperation,
 } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
+import {
+  parseAddress,
+  parseRange,
+  type RangeBounds,
+} from '@genoffice/xlsx-gateway/domain/cell-address'
 import { normalizeSheetRefs, primaryCellOf, primarySheetId, type SheetRef } from './mcp-sheet-refs'
+import type { FindCellsOptions, FindCellsOutcome } from './ai/tools'
 
 /**
  * Renderer half of the MCP → sheets-grid bridge.
@@ -28,6 +34,26 @@ const READY_POLL_MS = 50
 const READY_SLOW_POLL_MS = 1_000
 const READY_FAST_WINDOW_MS = 20_000
 
+/** search_sheet match-count bounds, mirroring the MCP search tool's own */
+const SEARCH_RESULTS_DEFAULT = 100
+const SEARCH_MAX_RESULTS = 500
+
+/** does an A1 address fall inside an inclusive range? (malformed address → false) */
+function addressInBounds(address: string, bounds: RangeBounds): boolean {
+  let coords
+  try {
+    coords = parseAddress(address)
+  } catch {
+    return false
+  }
+  return (
+    coords.row >= bounds.startRow &&
+    coords.row <= bounds.endRow &&
+    coords.column >= bounds.startColumn &&
+    coords.column <= bounds.endColumn
+  )
+}
+
 export interface McpSheetHandlers {
   /** workbook mounted and editable? (drives the ready announce) */
   hasWorkbook: () => boolean
@@ -41,6 +67,8 @@ export interface McpSheetHandlers {
     sheetId: string | undefined,
     opts: { maxRows?: number },
   ) => unknown | Promise<unknown>
+  /** find cells across the workbook (the in-app find_cells engine); hits carry {sheetName,address,value,formula?} */
+  findCells: (options: FindCellsOptions) => FindCellsOutcome | Promise<FindCellsOutcome>
   /** the workbook's worksheets, for resolving name-addressed ops */
   sheets: () => readonly SheetRef[]
   /** apply a workbook DSL batch (planFromOps + applyChangePlan) */
@@ -166,6 +194,71 @@ export function installSheetsMcpBridge(handlers: McpSheetHandlers): () => void {
           } else {
             reply(true, { context: handlers.context() })
           }
+          return
+        }
+        case 'search_sheet': {
+          const query = typeof payload.query === 'string' ? payload.query : ''
+          if (!query.trim()) {
+            reply(false, undefined, 'search_sheet needs a non-empty "query"')
+            return
+          }
+          const resolved = resolveReadSheet(
+            typeof payload.sheet === 'string' ? payload.sheet : undefined,
+            typeof payload.sheetId === 'string' ? payload.sheetId : undefined,
+          )
+          if (!resolved.ok) {
+            reply(false, undefined, resolved.error)
+            return
+          }
+          // A range narrows the hits to one A1 area; the engine scans a sheet
+          // (or the whole workbook), so the area filter is applied afterwards.
+          const range = typeof payload.range === 'string' ? payload.range.trim() : ''
+          let bounds: RangeBounds | undefined
+          if (range) {
+            try {
+              bounds = parseRange(range)
+            } catch (error) {
+              reply(
+                false,
+                undefined,
+                error instanceof Error ? error.message : `invalid range "${range}"`,
+              )
+              return
+            }
+          }
+          const lookInRaw = payload.lookIn
+          const maxRaw = Number(payload.maxResults)
+          const outcome = await handlers.findCells({
+            query,
+            regex: payload.regex === true,
+            lookIn: lookInRaw === 'values' || lookInRaw === 'formulas' ? lookInRaw : 'both',
+            errorsOnly: false,
+            sheetId: resolved.sheetId,
+            maxResults:
+              Number.isFinite(maxRaw) && maxRaw >= 1
+                ? Math.min(Math.trunc(maxRaw), SEARCH_MAX_RESULTS)
+                : SEARCH_RESULTS_DEFAULT,
+          })
+          if (outcome.error) {
+            reply(false, undefined, outcome.error)
+            return
+          }
+          const kept = bounds
+            ? outcome.matches.filter((match) => addressInBounds(match.address, bounds))
+            : outcome.matches
+          reply(true, {
+            total: kept.length,
+            matches: kept.map((match) => ({
+              sheet: match.sheetName,
+              address: match.address,
+              value: match.value,
+              ...(match.formula === undefined ? {} : { formula: match.formula }),
+            })),
+            truncated: outcome.truncated,
+            ...(outcome.incompleteSheets.length
+              ? { incompleteSheets: outcome.incompleteSheets }
+              : {}),
+          })
           return
         }
         case 'apply_ops': {

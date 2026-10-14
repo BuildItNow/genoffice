@@ -345,6 +345,7 @@ describe('M6 visible-editing tools (docs control wired)', () => {
       'read_docx',
       'replace_blocks',
       'save_session',
+      'search_document',
     ])
   })
 
@@ -421,6 +422,43 @@ describe('M6 visible-editing tools (docs control wired)', () => {
       command: 'read_document',
       payload: { range: undefined, full: false, maxChars: undefined, offset: undefined },
     })
+  })
+
+  it('routes search_document with its match options to the session tab', async () => {
+    await client2!.callTool({ name: 'create_session', arguments: { family: 'docx' } })
+    const result = await client2!.callTool({
+      name: 'search_document',
+      arguments: {
+        query: 'needle',
+        range: '3-10',
+        matchCase: true,
+        wholeWord: true,
+        regex: false,
+        maxResults: 20,
+        context: 10,
+      },
+    })
+    expect(result.isError).toBeFalsy()
+    expect(fake.calls.at(-1)).toEqual({
+      wcId: 42,
+      command: 'search_document',
+      payload: {
+        query: 'needle',
+        range: '3-10',
+        matchCase: true,
+        wholeWord: true,
+        regex: false,
+        maxResults: 20,
+        context: 10,
+      },
+    })
+  })
+
+  it('refuses an empty search query before reaching the editor', async () => {
+    await client2!.callTool({ name: 'create_session', arguments: { family: 'docx' } })
+    const result = await client2!.callTool({ name: 'search_document', arguments: { query: '' } })
+    expect(result.isError).toBe(true)
+    expect(fake.calls.some((c) => c.command === 'search_document')).toBe(false)
   })
 
   it('save_session forwards path + overwrite and ends the session', async () => {

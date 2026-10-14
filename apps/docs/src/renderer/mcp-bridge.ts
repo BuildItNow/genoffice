@@ -4,6 +4,13 @@ import type { McpCommandMessage, McpEditorCommand } from '../shared/ipc'
 import { executeTool, markDocSeen } from './ai/tools'
 import { findNumId, serializeRangeToHtml, type NumIds } from './ai/protocol'
 import { isTrackedDeleted } from './ai/doc-utils'
+import {
+  compileFind,
+  findInDoc,
+  matchContext,
+  RESULTS_LIST_CAP,
+  type FindOptions,
+} from './editor/find'
 import { save, type FileActionContext } from './file-actions'
 
 /**
@@ -57,10 +64,45 @@ interface ReadDocumentInput {
   /** character offset to continue a paged read */
   offset?: number
 }
+interface SearchDocumentInput {
+  query: string
+  /** 0-based block index range to scope the search: "3" or "3-10"; omitted = whole body */
+  range?: string
+  matchCase?: boolean
+  wholeWord?: boolean
+  /** treat `query` as a regular expression instead of literal text */
+  regex?: boolean
+  maxResults?: number
+  /** characters of context to include on either side of a hit */
+  context?: number
+}
+/** one hit, addressed by top-level block index (what `read_document { range }` takes) */
+interface SearchBlockHit {
+  block: number
+  /** the matched text with `radius` characters of context on either side (ellipses when trimmed) */
+  snippet: string
+}
 
 /** read_document paging: the in-app read_blocks page size, and the CLI's --max-chars cap. */
 const READ_PAGE_CHARS = 24_000
 const READ_MAX_CHARS = 1_000_000
+
+/** search_document defaults, mirroring the MCP search tool's own bounds */
+const SEARCH_RESULTS_DEFAULT = 100
+const SEARCH_CONTEXT_DEFAULT = 30
+const SEARCH_CONTEXT_MAX = 200
+/** clamp a caller's maxResults into 1..RESULTS_LIST_CAP (the find engine's list cap) */
+function clampSearchResults(value: unknown): number {
+  const n = Math.trunc(Number(value))
+  if (!Number.isFinite(n) || n < 1) return Math.min(SEARCH_RESULTS_DEFAULT, RESULTS_LIST_CAP)
+  return Math.min(n, RESULTS_LIST_CAP)
+}
+/** clamp a caller's context radius into 0..SEARCH_CONTEXT_MAX */
+function clampSearchContext(value: unknown): number {
+  const n = Math.trunc(Number(value))
+  if (!Number.isFinite(n) || n < 0) return SEARCH_CONTEXT_DEFAULT
+  return Math.min(n, SEARCH_CONTEXT_MAX)
+}
 
 /** parse a CLI-style block range ("3" | "3-10") into 0-based inclusive indexes; default = whole body */
 function parseBlockRange(spec: string | undefined, count: number): { start: number; end: number } {
@@ -122,8 +164,8 @@ async function runCommand(
       // block, so a mistyped index quietly inserts somewhere unintended while
       // replace_blocks rejects the same mistake. Reject it here too — the
       // in-app agent keeps the clamping behavior it was built around.
+      const last = editor.state.doc.childCount - 1
       if (input.afterBlockIndex !== undefined) {
-        const last = editor.state.doc.childCount - 1
         if (!Number.isInteger(input.afterBlockIndex) || input.afterBlockIndex < -1) {
           throw new Error(`afterBlockIndex must be an integer >= -1 (got ${input.afterBlockIndex})`)
         }
@@ -134,9 +176,13 @@ async function runCommand(
           )
         }
       }
+      // An omitted afterBlockIndex would make the shared executor target the
+      // block containing the cursor — but an external MCP caller has no cursor,
+      // and this tool promises to append at the end. Default it to the last block.
+      const after = input.afterBlockIndex ?? last
       const outcome = await executeTool(
         editor,
-        { id: 'mcp', name: 'insert_content', input: { ...input } },
+        { id: 'mcp', name: 'insert_content', input: { ...input, afterBlockIndex: after } },
         numIdsFor(ctx),
       )
       if (outcome.isError) throw new Error(mcpErrorText(outcome.output))
@@ -236,6 +282,46 @@ async function runCommand(
         total: html.length,
         ...(next < html.length ? { offset: next } : {}),
       }
+    }
+
+    case 'search_document': {
+      const input = (payload ?? {}) as SearchDocumentInput
+      if (typeof input.query !== 'string' || input.query === '') {
+        throw new Error('search_document requires a non-empty "query"')
+      }
+      // Same engine the in-app Find panel uses, so hits match what the user sees.
+      const opts: FindOptions = {
+        matchCase: input.matchCase === true,
+        wholeWord: input.wholeWord === true,
+        mode: input.regex === true ? 'regex' : 'literal',
+      }
+      const compiled = compileFind(input.query, opts)
+      if (!compiled.ok) throw new Error(`invalid search query: ${compiled.error}`)
+      const count = editor.state.doc.childCount
+      const scope =
+        typeof input.range === 'string' && input.range.trim() !== ''
+          ? parseBlockRange(input.range, count)
+          : undefined
+      const maxResults = clampSearchResults(input.maxResults)
+      const context = clampSearchContext(input.context)
+      const matches: SearchBlockHit[] = []
+      let truncated = false
+      for (const m of findInDoc(editor.state.doc, compiled.query, opts)) {
+        // index(0) is the top-level block the match sits in — the index
+        // read_document / apply_ops address, so a hit feeds straight back in.
+        const block = editor.state.doc.resolve(m.from).index(0)
+        if (scope && (block < scope.start || block > scope.end)) continue
+        if (matches.length >= maxResults) {
+          truncated = true
+          break
+        }
+        const ctx = matchContext(m, context)
+        matches.push({
+          block,
+          snippet: ctx.before + ctx.hit + ctx.after,
+        })
+      }
+      return { blocks: count, total: matches.length, truncated, matches }
     }
 
     case 'save_document': {

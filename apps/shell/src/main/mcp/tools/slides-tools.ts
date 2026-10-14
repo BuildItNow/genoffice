@@ -148,6 +148,110 @@ export function slidesDriver(slides: SlidesControl): FamilyDriver {
   }
 }
 
+/** search_deck result-count/context bounds (default 100 / 30, hard cap 500 / 200) */
+const DECK_SEARCH_DEFAULT_RESULTS = 100
+const DECK_SEARCH_MAX_RESULTS = 500
+const DECK_SEARCH_CONTEXT_DEFAULT = 30
+const DECK_SEARCH_CONTEXT_MAX = 200
+
+function clampSearchResults(value: unknown): number {
+  const n = Math.trunc(Number(value))
+  if (!Number.isFinite(n) || n < 1) return DECK_SEARCH_DEFAULT_RESULTS
+  return Math.min(n, DECK_SEARCH_MAX_RESULTS)
+}
+
+function clampSearchContext(value: unknown): number {
+  const n = Math.trunc(Number(value))
+  if (!Number.isFinite(n) || n < 0) return DECK_SEARCH_CONTEXT_DEFAULT
+  return Math.min(n, DECK_SEARCH_CONTEXT_MAX)
+}
+
+/** the `read_deck {full:true}` surface this scan reads (see pptx-ops describe-deck.ts) */
+interface DeckElementLike {
+  id?: string | null
+  type?: string
+  text?: string
+  children?: DeckElementLike[]
+}
+interface DeckPageLike {
+  index?: number
+  elements?: DeckElementLike[]
+  notes?: string
+}
+
+/** a pptx hit, addressed by 0-based slide + element id (the apply_slide_ops vocabulary) */
+export interface DeckSearchHit {
+  slide: number
+  el: string | null
+  type: string
+  snippet: string
+}
+
+/** `radius` characters on each side of a hit, whitespace collapsed, with ellipses */
+function deckSnippet(text: string, index: number, length: number, radius: number): string {
+  const start = Math.max(0, index - radius)
+  const end = Math.min(text.length, index + length + radius)
+  const before = text.slice(start, index).replace(/\s+/g, ' ')
+  const after = text.slice(index + length, end).replace(/\s+/g, ' ')
+  return `${start > 0 ? '…' : ''}${before}${text.slice(index, index + length)}${after}${
+    end < text.length ? '…' : ''
+  }`
+}
+
+/**
+ * Scan a full deck read for a literal substring. Text lives on leaf elements
+ * (a group has no text of its own), so a group is walked into and each hit is
+ * attributed to the child whose id apply_slide_ops addresses. Speaker notes are
+ * scanned too, reported with a null `el` and type "notes".
+ */
+export function scanDeck(
+  deck: unknown,
+  opts: { query: string; slide?: number; matchCase: boolean; maxResults: number; context: number },
+): { slides: number; total: number; truncated: boolean; matches: DeckSearchHit[] } {
+  const pages = ((deck as { pages?: DeckPageLike[] } | null | undefined)?.pages ??
+    []) as DeckPageLike[]
+  const needle = opts.matchCase ? opts.query : opts.query.toLowerCase()
+  const matches: DeckSearchHit[] = []
+  let truncated = false
+  if (!needle) return { slides: pages.length, total: 0, truncated, matches }
+
+  const push = (slide: number, el: string | null, type: string, text: string): boolean => {
+    const hay = opts.matchCase ? text : text.toLowerCase()
+    let at = hay.indexOf(needle)
+    while (at !== -1) {
+      if (matches.length >= opts.maxResults) {
+        truncated = true
+        return false
+      }
+      matches.push({ slide, el, type, snippet: deckSnippet(text, at, needle.length, opts.context) })
+      at = hay.indexOf(needle, at + needle.length)
+    }
+    return true
+  }
+
+  const walk = (el: DeckElementLike, slide: number): boolean => {
+    if (typeof el.text === 'string' && el.text) {
+      if (!push(slide, el.id ?? null, el.type ?? 'element', el.text)) return false
+    }
+    for (const child of el.children ?? []) {
+      if (!walk(child, slide)) return false
+    }
+    return true
+  }
+
+  outer: for (const page of pages) {
+    const slide = typeof page.index === 'number' ? page.index : 0
+    if (opts.slide !== undefined && slide !== opts.slide) continue
+    for (const el of page.elements ?? []) {
+      if (!walk(el, slide)) break outer
+    }
+    if (typeof page.notes === 'string' && page.notes) {
+      if (!push(slide, null, 'notes', page.notes)) break outer
+    }
+  }
+  return { slides: pages.length, total: matches.length, truncated, matches }
+}
+
 /**
  * Visible-deck content tools: edit the deck the shared session opened, so the
  * user watches each page take shape. The control mutates the main-process
@@ -207,6 +311,52 @@ function createDeckContentTools(deps: SlidesToolDeps, host: SessionHost): McpToo
           full: args.full === true,
           maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
         }),
+    },
+    {
+      name: 'search_deck',
+      description:
+        'Search inside the visible presentation and return every hit, addressed the way read_deck ' +
+        'and apply_slide_ops address content — {slide, el, type, snippet}, a 0-based slide plus the ' +
+        'element id — so a hit feeds straight into read_deck { slide } or apply_slide_ops ' +
+        "{ slide, el }. Every slide's element text and speaker notes are scanned; pass slide to " +
+        'search one 0-based slide. matchCase makes the match case-sensitive (default is ' +
+        'case-insensitive); maxResults caps the hits (default 100, max 500); context is the ' +
+        'characters of context around each hit (default 30).',
+      inputSchema: {
+        document: documentField,
+        query: z.string().describe('the text to find'),
+        slide: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('0-based slide to search; default is every slide'),
+        matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+        maxResults: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('cap on returned hits (default 100, max 500)'),
+        context: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('characters of context around each hit (default 30)'),
+      },
+      handler: async (args) => {
+        const query = String(args.query ?? '')
+        if (!query) throw new Error('query must not be empty')
+        const deck = await slides.readDeck(await target(args.document), { full: true })
+        return scanDeck(deck, {
+          query,
+          slide: typeof args.slide === 'number' ? args.slide : undefined,
+          matchCase: args.matchCase === true,
+          maxResults: clampSearchResults(args.maxResults),
+          context: clampSearchContext(args.context),
+        })
+      },
     },
     {
       name: 'apply_slide_ops',

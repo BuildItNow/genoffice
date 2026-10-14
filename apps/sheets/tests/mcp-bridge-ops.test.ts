@@ -37,6 +37,7 @@ function bridgeWith(overrides: Partial<McpSheetHandlers> = {}): McpSheetHandlers
     context: () => ({}),
     readCells: () => ({}),
     readRange: () => ({}),
+    findCells: () => ({ matches: [], truncated: false, incompleteSheets: [] }),
     sheets: () => [{ id: 'sheet-1', name: 'Sheet1' }],
     focusSheet: () => {},
     applyOps: vi.fn().mockResolvedValue({ ok: true }),
@@ -45,11 +46,19 @@ function bridgeWith(overrides: Partial<McpSheetHandlers> = {}): McpSheetHandlers
   }
 }
 
-async function applyOps(payload: Record<string, unknown>): Promise<void> {
-  const uninstall = installSheetsMcpBridge(bridgeWith())
-  commandListener!({ requestId: 1, command: 'apply_ops', payload })
+async function sendCommand(
+  command: string,
+  payload: Record<string, unknown>,
+  overrides: Partial<McpSheetHandlers> = {},
+): Promise<void> {
+  const uninstall = installSheetsMcpBridge(bridgeWith(overrides))
+  commandListener!({ requestId: 1, command, payload })
   uninstall()
   await vi.waitFor(() => expect(reportMcpResult).toHaveBeenCalledTimes(1))
+}
+
+async function applyOps(payload: Record<string, unknown>): Promise<void> {
+  await sendCommand('apply_ops', payload)
 }
 
 describe('mcp bridge apply_ops validation', () => {
@@ -76,5 +85,71 @@ describe('mcp bridge apply_ops validation', () => {
     expect(applyOpsFn).toHaveBeenCalledTimes(1)
     const reply = reportMcpResult.mock.calls[0]![0] as { ok: boolean }
     expect(reply.ok).toBe(true)
+  })
+})
+
+describe('mcp bridge search_sheet', () => {
+  it('forwards query, regex, lookIn and maxResults to the find engine', async () => {
+    const findCells = vi.fn().mockReturnValue({
+      matches: [{ sheetName: 'Sheet1', address: 'A1', value: 'sum' }],
+      truncated: false,
+      incompleteSheets: [],
+    })
+    await sendCommand(
+      'search_sheet',
+      { query: 'sum', regex: true, lookIn: 'formulas', maxResults: 5 },
+      { findCells },
+    )
+    expect(findCells).toHaveBeenCalledWith({
+      query: 'sum',
+      regex: true,
+      lookIn: 'formulas',
+      errorsOnly: false,
+      sheetId: undefined,
+      maxResults: 5,
+    })
+    const reply = reportMcpResult.mock.calls[0]![0] as { ok: boolean; result?: unknown }
+    expect(reply.ok).toBe(true)
+    // the reply renames the engine's sheetName to the read_sheet vocabulary (`sheet`)
+    expect(reply.result).toEqual({
+      total: 1,
+      matches: [{ sheet: 'Sheet1', address: 'A1', value: 'sum' }],
+      truncated: false,
+    })
+  })
+
+  it('scopes the hits to an A1 range after the engine scans', async () => {
+    const findCells = vi.fn().mockReturnValue({
+      matches: [
+        { sheetName: 'Sheet1', address: 'A1', value: 'x' },
+        { sheetName: 'Sheet1', address: 'Z9', value: 'x' },
+      ],
+      truncated: false,
+      incompleteSheets: [],
+    })
+    await sendCommand('search_sheet', { query: 'x', range: 'A1:D20' }, { findCells })
+    const reply = reportMcpResult.mock.calls[0]![0] as {
+      result: { total: number; matches: Array<{ address: string }> }
+    }
+    expect(reply.result.total).toBe(1)
+    expect(reply.result.matches).toEqual([{ sheet: 'Sheet1', address: 'A1', value: 'x' }])
+  })
+
+  it('refuses an empty query before reaching the engine', async () => {
+    const findCells = vi.fn()
+    await sendCommand('search_sheet', { query: '  ' }, { findCells })
+    const reply = reportMcpResult.mock.calls[0]![0] as { ok: boolean; error?: string }
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toContain('non-empty')
+    expect(findCells).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown worksheet name instead of scanning the wrong sheet', async () => {
+    const findCells = vi.fn()
+    await sendCommand('search_sheet', { query: 'x', sheet: 'Nope' }, { findCells })
+    const reply = reportMcpResult.mock.calls[0]![0] as { ok: boolean; error?: string }
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toContain('no worksheet named "Nope"')
+    expect(findCells).not.toHaveBeenCalled()
   })
 })

@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { readPdfText } from '../../../pdf/src/main/read-text'
-import { createPdfTools, parsePageList } from '../../src/main/mcp/tools/pdf-tools'
+import { createPdfTools, parsePageList, searchPdfFile } from '../../src/main/mcp/tools/pdf-tools'
 
 let dir: string
 let threePages: string
@@ -210,5 +210,95 @@ describe('read_pdf tool', () => {
 
   it('maps a pdfium load failure to a clean error', async () => {
     await expect(handler({ path: corrupt })).rejects.toThrow(/encrypted or corrupt/)
+  })
+})
+
+describe('searchPdfFile', () => {
+  const bytes = async (path: string): Promise<Uint8Array> => {
+    const { readFileSync } = await import('node:fs')
+    return new Uint8Array(readFileSync(path))
+  }
+
+  it('finds a literal hit and addresses it by 1-based page', async () => {
+    const out = await searchPdfFile(await bytes(threePages), { query: 'Hello' })
+    expect(out.pageCount).toBe(3)
+    expect(out.matches).toHaveLength(1)
+    expect(out.matches[0]).toMatchObject({ page: 1 })
+    expect(out.matches[0]!.snippet).toContain('Hello')
+    expect(out.truncated).toBe(false)
+  })
+
+  it('matches case-insensitively by default and exactly with matchCase', async () => {
+    const fold = await searchPdfFile(await bytes(threePages), { query: 'hello' })
+    expect(fold.matches).toHaveLength(1)
+    const exact = await searchPdfFile(await bytes(threePages), { query: 'hello', matchCase: true })
+    expect(exact.matches).toHaveLength(0)
+  })
+
+  it('scopes the scan to a page span', async () => {
+    const wrong = await searchPdfFile(await bytes(threePages), { query: 'Tail', pages: '1' })
+    expect(wrong.matches).toHaveLength(0)
+    const right = await searchPdfFile(await bytes(threePages), { query: 'Tail', pages: '3' })
+    expect(right.matches.map((m) => m.page)).toEqual([3])
+  })
+
+  it('caps the hits and reports truncation', async () => {
+    const out = await searchPdfFile(await bytes(threePages), { query: 'e', maxResults: 2 })
+    expect(out.matches).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+  })
+
+  it('returns no matches for text that is absent', async () => {
+    const out = await searchPdfFile(await bytes(threePages), { query: 'zzzz' })
+    expect(out.matches).toEqual([])
+    expect(out.truncated).toBe(false)
+  })
+})
+
+describe('search_pdf tool', () => {
+  const handler = createPdfTools()[1]!.handler as (
+    args: Record<string, unknown>,
+  ) => Promise<unknown>
+
+  it('guards the path and the query', async () => {
+    await expect(handler({ path: 'relative.pdf', query: 'x' })).rejects.toThrow(
+      /path must be absolute/,
+    )
+    await expect(handler({ path: join(dir, 'x.txt'), query: 'x' })).rejects.toThrow(/\.pdf/)
+    await expect(handler({ path: join(dir, 'nope.pdf'), query: 'x' })).rejects.toThrow(
+      /file not found/,
+    )
+    await expect(handler({ path: threePages, query: '' })).rejects.toThrow(
+      /query must not be empty/,
+    )
+  })
+
+  it('returns hits addressed the way read_pdf addresses pages', async () => {
+    const out = (await handler({ path: threePages, query: 'Tail' })) as {
+      pageCount: number
+      total: number
+      matches: Array<{ page: number; snippet: string }>
+    }
+    expect(out.total).toBe(1)
+    expect(out.pageCount).toBe(3)
+    expect(out.matches[0]).toMatchObject({ page: 3 })
+    expect(out.matches[0]!.snippet).toContain('Tail')
+  })
+
+  it('forwards pages, matchCase and maxResults to the scanner', async () => {
+    const scoped = (await handler({ path: threePages, query: 'Hello', pages: '3' })) as {
+      total: number
+    }
+    expect(scoped.total).toBe(0)
+    const exact = (await handler({ path: threePages, query: 'hello', matchCase: true })) as {
+      total: number
+    }
+    expect(exact.total).toBe(0)
+    const capped = (await handler({ path: threePages, query: 'e', maxResults: 1 })) as {
+      total: number
+      truncated: boolean
+    }
+    expect(capped.total).toBe(1)
+    expect(capped.truncated).toBe(true)
   })
 })

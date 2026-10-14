@@ -55,6 +55,83 @@ function nextPagesAfter(last: number, pageCount: number): string | undefined {
   return `${last + 1}-${Math.min(last + MAX_PAGES_PER_READ, pageCount)}`
 }
 
+/** search scans more of the file than a read returns: only snippet lengths leave memory */
+const MAX_SEARCH_CHARS = 400_000
+
+export interface PdfSearchResult {
+  pageCount: number
+  /** one entry per literal occurrence, addressed by 1-based page */
+  matches: Array<{ page: number; snippet: string }>
+  /** the cap or the scan budget stopped the search before the whole span was covered */
+  truncated: boolean
+}
+
+/** `radius` characters on each side of a hit, whitespace collapsed, with ellipses */
+function pdfSnippet(text: string, index: number, length: number, radius: number): string {
+  const start = Math.max(0, index - radius)
+  const end = Math.min(text.length, index + length + radius)
+  const before = text.slice(start, index).replace(/\s+/g, ' ')
+  const after = text.slice(index + length, end).replace(/\s+/g, ' ')
+  return `${start > 0 ? '…' : ''}${before}${text.slice(index, index + length)}${after}${
+    end < text.length ? '…' : ''
+  }`
+}
+
+/**
+ * Search a PDF's text layer for a literal substring, page by page. The results
+ * are addressed the way `read_pdf` addresses content (1-based `page`), so a hit
+ * feeds straight back into `read_pdf { pages }`. Scanned pages have no text
+ * layer and never match. A `pages` filter narrows the scan; the whole document
+ * is scanned otherwise, up to the character budget (reported via `truncated`).
+ */
+export async function searchPdfFile(
+  bytes: Uint8Array,
+  options: {
+    query: string
+    /** 1-based page span to scan, e.g. "1-5,8"; omit for every page */
+    pages?: string
+    matchCase?: boolean
+    maxResults?: number
+    /** characters of context on either side of a hit; default 30 */
+    context?: number
+  },
+): Promise<PdfSearchResult> {
+  const needle = options.matchCase ? options.query : options.query.toLowerCase()
+  const maxResults = Math.max(1, Math.trunc(options.maxResults ?? 100))
+  const context = Math.max(0, Math.trunc(options.context ?? 30))
+  // A zero-budget probe reports the page count (and surfaces a corrupt/encrypted
+  // file) before the page span can be resolved.
+  const probe = await readPdfText(bytes, { charBudget: 0 })
+  if (!needle) return { pageCount: probe.pageCount, matches: [], truncated: false }
+  const pages = options.pages ? parsePageList(options.pages, probe.pageCount) : undefined
+  const doc = await readPdfText(bytes, {
+    ...(pages ? { pages } : {}),
+    charBudget: MAX_SEARCH_CHARS,
+  })
+
+  const matches: PdfSearchResult['matches'] = []
+  let truncated = false
+  outer: for (const pageText of doc.pages) {
+    const text = pageText.text
+    const haystack = options.matchCase ? text : text.toLowerCase()
+    let at = haystack.indexOf(needle)
+    while (at !== -1) {
+      if (matches.length >= maxResults) {
+        truncated = true
+        break outer
+      }
+      matches.push({
+        page: pageText.page,
+        snippet: pdfSnippet(text, at, needle.length, context),
+      })
+      at = haystack.indexOf(needle, at + needle.length)
+    }
+  }
+  // the scan budget clipping extraction also means later pages went unsearched
+  if (doc.truncated) truncated = true
+  return { pageCount: doc.pageCount, matches, truncated }
+}
+
 export function createPdfTools(): McpToolDefinition[] {
   return [
     {
@@ -136,6 +213,55 @@ export function createPdfTools(): McpToolDefinition[] {
           truncated: more,
           ...(more && next ? { nextPages: next } : {}),
         }
+      },
+    },
+    {
+      name: 'search_pdf',
+      description:
+        'Search a PDF file for text and return every hit, addressed the way read_pdf addresses ' +
+        'content — {page, snippet} with 1-based pages — so a hit feeds straight into ' +
+        'read_pdf { pages: String(page) }. `pages` scopes the scan (e.g. "1-5,8"); matchCase makes ' +
+        'the match case-sensitive (default is case-insensitive); maxResults caps the hits (default ' +
+        '100, max 500); context is the characters of context around each hit (default 30). Scanned ' +
+        'pages have no text layer and never match.',
+      inputSchema: {
+        path: z.string().describe('absolute path to a .pdf file'),
+        query: z.string().describe('the text to find'),
+        pages: z
+          .string()
+          .optional()
+          .describe('1-based pages to scan, e.g. "1-5,8"; default is every page'),
+        matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+        maxResults: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('cap on returned hits (default 100, max 500)'),
+        context: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('characters of context around each hit (default 30)'),
+      },
+      handler: async (args) => {
+        const filePath = String(args.path ?? '')
+        if (!isAbsolute(filePath)) throw new Error('path must be absolute')
+        if (extname(filePath).toLowerCase() !== PDF_EXT)
+          throw new Error('path must point to a .pdf file')
+        if (!existsSync(filePath)) throw new Error(`file not found: ${filePath}`)
+        const query = String(args.query ?? '')
+        if (!query) throw new Error('query must not be empty')
+        const bytes = new Uint8Array(await readFile(filePath))
+        const result = await searchPdfFile(bytes, {
+          query,
+          pages: typeof args.pages === 'string' ? args.pages : undefined,
+          matchCase: args.matchCase === true,
+          maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
+          context: typeof args.context === 'number' ? args.context : undefined,
+        })
+        return { ...result, total: result.matches.length }
       },
     },
   ]

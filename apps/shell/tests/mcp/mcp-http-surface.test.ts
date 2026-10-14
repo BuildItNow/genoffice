@@ -49,6 +49,10 @@ const DEFAULT_NAMES = [
   'read_sheet',
   'replace_blocks',
   'save_session',
+  'search_deck',
+  'search_document',
+  'search_pdf',
+  'search_sheet',
 ].sort()
 
 const BACKGROUND_NAMES = [...DEFAULT_NAMES, 'create_docx', 'create_pptx', 'create_xlsx'].sort()
@@ -79,6 +83,13 @@ function docsControl(): { control: DocsControl; calls: Array<Record<string, unkn
       switch (command) {
         case 'read_document':
           return { blocks: [{ index: 0, text: 'Quarterly Report' }], text: 'Quarterly Report' }
+        case 'search_document':
+          return {
+            blocks: 1,
+            total: 1,
+            truncated: false,
+            matches: [{ block: 0, snippet: 'Quarterly Report' }],
+          }
         case 'insert_content':
           return { summary: 'inserted', mutated: true }
         case 'replace_blocks':
@@ -111,7 +122,13 @@ function slidesControl(): { control: SlidesControl; saved: string[] } {
         }
         return { applied: true, records: ops.map((o) => ({ op: o.op })) }
       },
-      readDeck: async (wcId) => ({ slides: [{ index: 0, wc: wcId, elements: [] }] }),
+      readDeck: async () => ({
+        slides: 2,
+        pages: [
+          { index: 0, elements: [{ id: 'el-1', type: 'text', text: 'Quarterly deck' }] },
+          { index: 1, elements: [{ id: 'el-2', type: 'text', text: 'Body copy' }] },
+        ],
+      }),
       saveDeck: async (_wcId, path) => {
         saved.push(path)
         return { path }
@@ -137,6 +154,13 @@ function sheetsControl(): { control: SheetsControl; saved: string[] } {
           return p.addresses?.length
             ? { cells: { A1: { value: 'hello', rawValue: 'hello' } } }
             : { context: { sheetId: 's1', wc: wcId, sheets: [] } }
+        }
+        if (command === 'search_sheet') {
+          return {
+            total: 1,
+            matches: [{ sheet: 's1', address: 'A1', value: 'Quarterly' }],
+            truncated: false,
+          }
         }
         if (p.ops?.some((o) => o.op === 'explode')) return { ok: false, reason: 'boom' }
         return { ok: true, applied: p.ops?.length ?? 0 }
@@ -313,6 +337,14 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       expect(read.isError).toBe(false)
       expect((read.json as { text: string }).text).toContain('Quarterly Report')
 
+      // a search over the same document: hits address the block they land in, so
+      // they feed straight into read_document { range }
+      const docSearch = await call(client, 'search_document', { query: 'Quarterly' })
+      expect(docSearch.isError).toBe(false)
+      const docHits = docSearch.json as { total: number; matches: Array<{ block: number }> }
+      expect(docHits.total).toBe(1)
+      expect(docHits.matches[0]!.block).toBe(0)
+
       // ── 5. cross-family refusal (schema-valid, host-level) ────────────────
       // a second session switches the family; the docx content tool now refuses
       const pptxSession = await call(client, 'create_session', { family: 'pptx' })
@@ -324,6 +356,13 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       // read_deck now works (the active family matches)
       const deck = await call(client, 'read_deck', {})
       expect(deck.isError).toBe(false)
+      const deckSearch = await call(client, 'search_deck', { query: 'quarterly' })
+      expect(deckSearch.isError).toBe(false)
+      expect((deckSearch.json as { total: number }).total).toBe(1)
+      // search is per-family: the docx search refuses a pptx session
+      const crossSearch = await call(client, 'search_document', { query: 'x' })
+      expect(crossSearch.isError).toBe(true)
+      expect(crossSearch.text).toMatch(/active session is a presentation/)
       const txn = await call(client, 'apply_slide_ops', { ops: [{ op: 'addBlankSlide' }] })
       expect(txn.isError).toBe(false)
       const failedTxn = await call(client, 'apply_slide_ops', { ops: [{ op: 'explode' }] })
@@ -363,6 +402,10 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       const cells = await call(client, 'read_sheet', { addresses: ['A1'] })
       expect(cells.isError).toBe(false)
       expect(cells.text).toContain('hello')
+      const sheetSearch = await call(client, 'search_sheet', { query: 'Quarterly' })
+      expect(sheetSearch.isError).toBe(false)
+      const sheetHits = sheetSearch.json as { matches: Array<{ address: string }> }
+      expect(sheetHits.matches[0]!.address).toBe('A1')
       const sheetOps = await call(client, 'apply_sheet_ops', {
         ops: [{ op: 'set_cell', sheetId: 's1', address: 'A1', value: 'x' }],
       })
@@ -423,6 +466,13 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       expect(past.isError).toBe(false)
       const pastPages = (past.json as { pages: Array<{ page: number }> }).pages
       expect(pastPages.map((p) => p.page)).toEqual([1, 2])
+      // search_pdf reads the file on disk and addresses hits by 1-based page, so
+      // a hit feeds straight into read_pdf { pages: String(page) }
+      const pdfSearch = await call(client, 'search_pdf', { path: pdfPath, query: 'through' })
+      expect(pdfSearch.isError).toBe(false)
+      const pdfHits = pdfSearch.json as { total: number; matches: Array<{ page: number }> }
+      expect(pdfHits.total).toBe(1)
+      expect(pdfHits.matches[0]!.page).toBe(1)
     } finally {
       await client.close()
     }

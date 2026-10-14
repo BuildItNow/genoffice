@@ -99,4 +99,56 @@ describe('gui tool table', () => {
     expect(tool.shape).toHaveProperty('maxRows')
     expect(z.object(tool.shape).safeParse({ range: 'A1:D20', maxRows: 5 }).success).toBe(true)
   })
+
+  it('exposes one search tool per family, each shaped like its read tool', () => {
+    const byName = new Map(GUI_TOOLS.map((t) => [t.name, t]))
+    const specs = [
+      {
+        name: 'office_gui_search_document',
+        upstream: 'search_document',
+        extra: ['wholeWord', 'regex', 'context'],
+      },
+      {
+        name: 'office_gui_search_sheet',
+        upstream: 'search_sheet',
+        extra: ['sheet', 'sheetId', 'lookIn'],
+      },
+      { name: 'office_gui_search_deck', upstream: 'search_deck', extra: ['slide', 'context'] },
+      { name: 'office_gui_search_pdf', upstream: 'search_pdf', extra: ['pages', 'context'] },
+    ]
+    for (const spec of specs) {
+      const tool = byName.get(spec.name)
+      expect(tool?.upstream).toBe(spec.upstream)
+      expect(tool?.readOnly).toBe(true)
+      // a GUI search names a live document, never a bare path
+      expect(tool?.shape).toHaveProperty('document')
+      expect(tool?.shape).toHaveProperty('query')
+      expect(tool?.shape).not.toHaveProperty('path')
+      for (const field of spec.extra) expect(tool?.shape).toHaveProperty(field)
+      // query is required on every one
+      expect(z.object(tool!.shape).safeParse({}).success).toBe(false)
+    }
+    // the three session-backed searches fall back to the session's document; the
+    // pdf search has no session, so its document is required
+    for (const name of [
+      'office_gui_search_document',
+      'office_gui_search_sheet',
+      'office_gui_search_deck',
+    ]) {
+      expect(z.object(byName.get(name)!.shape).safeParse({ query: 'x' }).success).toBe(true)
+    }
+    const pdf = byName.get('office_gui_search_pdf')!
+    expect(z.object(pdf.shape).safeParse({ query: 'x' }).success).toBe(false)
+    expect(z.object(pdf.shape).safeParse({ document: 'd', query: 'x' }).success).toBe(true)
+    // only the pdf search reshapes document -> path (its upstream is path-based,
+    // like read_pdf); the others forward their arguments verbatim
+    expect(pdf.adapt).toBeTypeOf('function')
+    for (const name of [
+      'office_gui_search_document',
+      'office_gui_search_sheet',
+      'office_gui_search_deck',
+    ]) {
+      expect(byName.get(name)?.adapt).toBeUndefined()
+    }
+  })
 })
