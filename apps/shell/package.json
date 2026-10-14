@@ -30,6 +30,7 @@
     "@genoffice/i18n": "*",
     "@genoffice/pipelines": "*",
     "@genoffice/pptx-engine": "*",
+    "@genoffice/pptx-ops": "*",
     "@genoffice/pptx-render": "*",
     "@genoffice/sheets": "*",
     "@genoffice/slides": "*",

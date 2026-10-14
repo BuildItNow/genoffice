@@ -105,21 +105,35 @@ test.describe('MCP read_pdf', () => {
         return JSON.parse(reply.result?.content?.[0]?.text ?? '{}') as Record<string, unknown>
       }
 
-      const whole = payloadOf((await call({ path: pdfPath })).body) as {
+      // default = preview: page count + metadata + the opening pages' text
+      const preview = payloadOf((await call({ path: pdfPath })).body) as {
         pageCount: number
         info: { title?: string }
+        pages: Array<{ page: number; text: string }>
+      }
+      expect(preview.pageCount).toBe(2)
+      expect(preview.info.title).toBe('E2E Handout')
+      expect(preview.pages.map((p) => p.page)).toEqual([1, 2])
+      expect(preview.pages[0]!.text).toContain('Pdfium reads this')
+
+      const page1 = payloadOf((await call({ path: pdfPath, pages: '1' })).body) as {
         pages: Array<{ page: number; text: string; hasTextLayer: boolean }>
       }
-      expect(whole.pageCount).toBe(2)
-      expect(whole.info.title).toBe('E2E Handout')
-      expect(whole.pages[0]!.text).toContain('Pdfium reads this')
-      expect(whole.pages[0]!.text).not.toContain('\u0000')
-      expect(whole.pages[1]!.hasTextLayer).toBe(false)
+      expect(page1.pages.map((p) => p.page)).toEqual([1])
+      expect(page1.pages[0]!.text).toContain('Pdfium reads this')
+      expect(page1.pages[0]!.text).not.toContain('\u0000')
 
       const paged = payloadOf((await call({ path: pdfPath, pages: '2' })).body) as {
-        pages: Array<{ page: number }>
+        pages: Array<{ page: number; hasTextLayer: boolean }>
       }
       expect(paged.pages.map((p) => p.page)).toEqual([2])
+      expect(paged.pages[0]!.hasTextLayer).toBe(false)
+
+      // a window running past the end is clamped, not refused
+      const past = payloadOf((await call({ path: pdfPath, pages: '1-9' })).body) as {
+        pages: Array<{ page: number }>
+      }
+      expect(past.pages.map((p) => p.page)).toEqual([1, 2])
     } finally {
       await closeAndSaveVideo(launched, 'mcp-read-pdf')
     }

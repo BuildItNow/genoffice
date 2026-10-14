@@ -407,20 +407,34 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       await writeFile(pdfPath, await pdfDoc.save())
       const pdfRead = await call(client, 'read_pdf', { path: pdfPath })
       expect(pdfRead.isError).toBe(false)
-      const pdfJson = pdfRead.json as {
+      const pdfPreview = pdfRead.json as {
         pageCount: number
         info: { title?: string }
-        pages: Array<{ page: number; text: string; hasTextLayer: boolean }>
+        pages: Array<{ page: number; text: string }>
       }
-      expect(pdfJson.pageCount).toBe(2)
-      expect(pdfJson.info.title).toBe('Handout')
-      expect(pdfJson.pages[0]!.text).toContain('Read me through MCP')
-      expect(pdfJson.pages[1]!.hasTextLayer).toBe(false)
+      expect(pdfPreview.pageCount).toBe(2)
+      expect(pdfPreview.info.title).toBe('Handout')
+      // a preview by default: page count + metadata + the opening pages' text
+      expect(pdfPreview.pages.map((p) => p.page)).toEqual([1, 2])
+      expect(pdfPreview.pages[0]!.text).toContain('Read me through MCP')
+      const pdfPage1 = await call(client, 'read_pdf', { path: pdfPath, pages: '1' })
+      expect(pdfPage1.isError).toBe(false)
+      const page1 = (
+        pdfPage1.json as { pages: Array<{ page: number; text: string; hasTextLayer: boolean }> }
+      ).pages
+      expect(page1.map((p) => p.page)).toEqual([1])
+      expect(page1[0]!.text).toContain('Read me through MCP')
       const pdfPaged = await call(client, 'read_pdf', { path: pdfPath, pages: '2' })
       expect(pdfPaged.isError).toBe(false)
-      expect(
-        (pdfPaged.json as { pages: Array<{ page: number }> }).pages.map((p) => p.page),
-      ).toEqual([2])
+      const page2 = (pdfPaged.json as { pages: Array<{ page: number; hasTextLayer: boolean }> })
+        .pages
+      expect(page2.map((p) => p.page)).toEqual([2])
+      expect(page2[0]!.hasTextLayer).toBe(false)
+      // a window running past the end is clamped, not refused
+      const past = await call(client, 'read_pdf', { path: pdfPath, pages: '1-9' })
+      expect(past.isError).toBe(false)
+      const pastPages = (past.json as { pages: Array<{ page: number }> }).pages
+      expect(pastPages.map((p) => p.page)).toEqual([1, 2])
     } finally {
       await client.close()
     }

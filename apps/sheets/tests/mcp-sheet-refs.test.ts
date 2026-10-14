@@ -223,6 +223,7 @@ describe('mcp bridge sheet addressing', () => {
       hasWorkbook: () => true,
       context: () => ({}),
       readCells: () => ({}),
+      readRange: () => ({}),
       sheets: () => SHEETS,
       focusSheet: vi.fn(),
       applyOps: vi.fn().mockResolvedValue({ ok: true }),
@@ -324,5 +325,16 @@ describe('mcp bridge sheet addressing', () => {
     )
     expect(reply.ok).toBe(true)
     expect(readCells).toHaveBeenCalledWith(['A1'], 'sheet-1')
+  })
+
+  it('routes a named A1 range to the range reader with its paging option', async () => {
+    const readRange = vi.fn().mockReturnValue({ rows: [], rowsTotal: 0 })
+    const { reply } = await send(
+      'read_sheet',
+      { sheet: 'Data 2024', range: 'A1:D20', maxRows: 5 },
+      handlersWith({ readRange }),
+    )
+    expect(reply.ok, reply.error).toBe(true)
+    expect(readRange).toHaveBeenCalledWith('A1:D20', 'jg_nIT-Asw-tL3tvR3f4q', { maxRows: 5 })
   })
 })

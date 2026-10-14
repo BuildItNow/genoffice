@@ -175,15 +175,30 @@ function createGridContentTools(deps: SheetsToolDeps, host: SessionHost): McpToo
     {
       name: 'read_sheet',
       description:
-        'Read the visible workbook: sheet names with data extents, and optionally the current ' +
-        'values/formulas of specific cells. Address a worksheet by NAME (the CLI convention, and ' +
-        'stable across sessions) or by the sheetId the overview reports.',
+        'Read the visible workbook. By default an overview: sheet names with data extents. `range` ' +
+        'reads a rectangular A1 area (e.g. "A1:D20") as a value grid with formulas keyed by address — ' +
+        'the same read as the genoffice CLI `sheet read --range`; a grid too large for one call is ' +
+        'paged by rows and the result names the `range` to continue from, so paging the pages reads the ' +
+        'whole area. `addresses` reads up to 100 scattered cells instead. Address a worksheet by NAME ' +
+        '(the CLI convention, stable across sessions) or by the sheetId the overview reports.',
       inputSchema: {
+        range: z
+          .string()
+          .optional()
+          .describe('A1 range to read, e.g. "A1:D20" or "B2"; returns a value grid with formulas'),
+        maxRows: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'page the range: stop after this many rows; the result names the range to continue from',
+          ),
         addresses: z
           .array(z.string())
           .optional()
           .describe(
-            'A1 addresses to read (values + formulas, at most 100 per call); omit to get the workbook overview only',
+            'A1 addresses to read (values + formulas, at most 100 per call); use `range` for an area',
           ),
         sheet: z
           .string()
@@ -199,10 +214,16 @@ function createGridContentTools(deps: SheetsToolDeps, host: SessionHost): McpToo
       },
       handler: async (args) => {
         const wc = await target(args.document)
+        const range = typeof args.range === 'string' ? args.range.trim() : ''
+        if (range && Array.isArray(args.addresses) && args.addresses.length > 0) {
+          throw new Error('give either `range` or `addresses`, not both')
+        }
         if (Array.isArray(args.addresses) && args.addresses.length > MAX_READ_ADDRESSES) {
           throw new Error(`read at most ${MAX_READ_ADDRESSES} addresses per call`)
         }
         const payload = {
+          ...(range ? { range } : {}),
+          ...(typeof args.maxRows === 'number' ? { maxRows: args.maxRows } : {}),
           ...(Array.isArray(args.addresses) ? { addresses: args.addresses.map(String) } : {}),
           ...(typeof args.sheet === 'string' ? { sheet: args.sheet } : {}),
           ...(typeof args.sheetId === 'string' ? { sheetId: args.sheetId } : {}),

@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
 import { extname, isAbsolute } from 'node:path'
 import { webContents } from 'electron'
-import { elementDurableId, slideDurableId, type SlideElement } from '@genoffice/pptx-engine'
+import { describeDeck } from '@genoffice/pptx-ops'
 import { applySessionTxn, saveSessionDeckTo } from '../../../../slides/src/main/slides-main'
 import { attachedIds, sessions, type Session } from '../../../../slides/src/main/session-state'
-import type { SlidesControl, SlidesTxnRequest } from './tools/slides-tools'
+import type { ReadDeckOptions, SlidesControl, SlidesTxnRequest } from './tools/slides-tools'
 
 /**
  * Shell-main half of the MCP → slides bridge.
@@ -15,18 +15,12 @@ import type { SlidesControl, SlidesTxnRequest } from './tools/slides-tools'
  * creates (`slides:new-blank`), then drives it through the same functions the
  * app's own `slides:apply-txn` and save pipeline use. Every transaction lands
  * in the session's undo history and journal, and the tab re-renders live.
+ *
+ * The readout is the shared `describeDeck` (`@genoffice/pptx-ops`), so `read_deck`
+ * and the CLI's `slides read` describe a deck identically.
  */
 
 const READY_TIMEOUT_MS = 20_000
-const EMU_PER_PX_96 = 9525
-/** per-text cap in read_deck, mirroring the CLI's describeDeck clipping */
-const MAX_TEXT_CHARS = 300
-/** table rows echoed per element (the CLI caps its own table output the same way) */
-const MAX_TABLE_ROWS = 3
-
-function clip(text: string, max = MAX_TEXT_CHARS): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text
-}
 
 /** the session a tab's renderer creates on boot; the renderer applies the blank deck right after */
 async function waitSession(wcId: number): Promise<Session> {
@@ -51,77 +45,6 @@ function requireSession(wcId: number): Session {
     throw new Error('the deck session is gone — its tab was closed; call create_session again')
   }
   return session
-}
-
-/**
- * Compact model readout for the agent: ids, geometry (EMU) and text per element.
- *
- * Group children carry the group's child coordinate system, not document-space
- * EMU, so their box is reported as `local` (with the parent's own box alongside)
- * instead of being passed off as an absolute position — an agent placing a
- * follow-up setTransform needs to know which frame it is addressing.
- */
-function elementInfo(el: SlideElement): Record<string, unknown> {
-  const t = el.transform?.offset ?? { x: 0, y: 0, cx: 0, cy: 0 }
-  const info: Record<string, unknown> = {
-    id: elementDurableId(el) ?? el.id,
-    type: el.type,
-    x: t.x,
-    y: t.y,
-    w: t.cx,
-    h: t.cy,
-  }
-  if (el.type === 'text' || el.type === 'shape') {
-    const paragraphs = el.text?.paragraphs ?? []
-    if (paragraphs.length) {
-      const full = paragraphs.map((p) => p.runs.map((r) => r.text).join('')).join('\n')
-      info.text = clip(full)
-      if (full.length > MAX_TEXT_CHARS) info.textTruncated = true
-    }
-  } else if (el.type === 'table') {
-    const rows = el.rows
-    const totalRows = rows.length
-    const body = rows
-      .slice(0, MAX_TABLE_ROWS)
-      .map((row) =>
-        row
-          .map((cell) =>
-            (cell.text?.paragraphs ?? []).map((p) => p.runs.map((r) => r.text).join('')).join(''),
-          )
-          .join(' | '),
-      )
-      .join('\n')
-    info.text = clip(body)
-    if (totalRows > MAX_TABLE_ROWS) {
-      info.textTruncated = true
-      info.rows = totalRows
-    }
-  } else if (el.type === 'group') {
-    // children are in the group's local frame: say so rather than implying
-    // document-space coordinates
-    info.children = el.children.map((child) => ({
-      ...elementInfo(child),
-      coordinates: 'local-to-group',
-    }))
-  }
-  return info
-}
-
-function readDeckModel(session: Session): Record<string, unknown> {
-  const deck = session.opened.deck
-  return {
-    emuPerPx: EMU_PER_PX_96,
-    note: 'x/y/w/h are EMU in slide space; elements inside a group use the group-local frame (marked coordinates:"local-to-group").',
-    slideSize: {
-      widthPx: Math.round(deck.size.cx / EMU_PER_PX_96),
-      heightPx: Math.round(deck.size.cy / EMU_PER_PX_96),
-    },
-    slides: deck.slides.map((slide, index) => ({
-      index,
-      id: slideDurableId(slide),
-      elements: slide.elements.map(elementInfo),
-    })),
-  }
 }
 
 export interface SlidesBridgeDeps {
@@ -170,7 +93,17 @@ export function createSlidesControl(deps: SlidesBridgeDeps): SlidesControl {
       const { slides: _renderTree, ...summary } = result
       return summary
     },
-    readDeck: async (wcId: number) => readDeckModel(requireSession(wcId)),
+    // Readout shared with the CLI's `slides read`; `opts` mirrors its
+    // --slide/--full/--max-chars flags.
+    readDeck: async (wcId: number, opts: ReadDeckOptions = {}) => {
+      const full = opts.full === true
+      return describeDeck(
+        requireSession(wcId).opened,
+        opts.slide,
+        full,
+        full ? Infinity : opts.maxChars,
+      )
+    },
     saveDeck: async (wcId: number, filePath: string, overwrite: boolean) => {
       if (!isAbsolute(filePath)) throw new Error('path must be absolute')
       const ext = extname(filePath).toLowerCase()

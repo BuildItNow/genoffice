@@ -46,6 +46,16 @@ export interface SlidesTxnRequest {
   dryRun?: boolean
 }
 
+/** how `read_deck` pages and clips, mirroring the CLI's `slides read --slide/--full/--max-chars`. */
+export interface ReadDeckOptions {
+  /** 0-based slide index to read; omit for every slide */
+  slide?: number
+  /** return whole text and every table row instead of the preview clip */
+  full?: boolean
+  /** clip text to this many characters (default 300); ignored when `full` */
+  maxChars?: number
+}
+
 /**
  * Visible-deck control implemented in the shell main process against the slides
  * main-process sessions (`slides-bridge.ts`).
@@ -55,8 +65,8 @@ export interface SlidesControl {
   openBlankTab: () => Promise<number>
   /** apply one transaction to the tab's session (history + journal + live render included) */
   runTxn: (wcId: number, req: SlidesTxnRequest) => Promise<unknown>
-  /** read the visible deck (slides/elements with ids and geometry) */
-  readDeck: (wcId: number) => Promise<unknown>
+  /** read the visible deck (slides/elements with ids, text and geometry); `opts` pages/clips like the CLI's `slides read` */
+  readDeck: (wcId: number, opts?: ReadDeckOptions) => Promise<unknown>
   /** save the session's deck to an absolute path */
   saveDeck: (wcId: number, path: string, overwrite: boolean) => Promise<{ path: string }>
 }
@@ -167,9 +177,36 @@ function createDeckContentTools(deps: SlidesToolDeps, host: SessionHost): McpToo
       description:
         'Read the visible presentation: every slide with its elements (ids, types, text, geometry) ' +
         'so you can target follow-up edits. Element ids and slide indexes are what apply_slide_ops ' +
-        'addresses; geometry is document-space EMU (1 px = 9525 EMU on a standard 16:9 deck).',
-      inputSchema: { document: documentField },
-      handler: async (args) => slides.readDeck(await target(args.document)),
+        'addresses; geometry is document-space EMU (1 px = 9525 EMU on a standard 16:9 deck). Text ' +
+        'and table rows are previewed (clipped) by default; pass full:true for the whole text and ' +
+        'every table row, maxChars to move the clip, and slide to read one slide (0-based). ' +
+        'Same shape as the genoffice CLI `slides read`.',
+      inputSchema: {
+        document: documentField,
+        slide: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('0-based slide index to read; default is every slide'),
+        full: z
+          .boolean()
+          .optional()
+          .describe('return whole text and every table row (no preview clipping)'),
+        maxChars: z
+          .number()
+          .int()
+          .positive()
+          .max(1_000_000)
+          .optional()
+          .describe('clip text to this many characters; default 300; ignored when full is true'),
+      },
+      handler: async (args) =>
+        slides.readDeck(await target(args.document), {
+          slide: typeof args.slide === 'number' ? args.slide : undefined,
+          full: args.full === true,
+          maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
+        }),
     },
     {
       name: 'apply_slide_ops',

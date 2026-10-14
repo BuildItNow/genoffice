@@ -397,6 +397,32 @@ describe('M6 visible-editing tools (docs control wired)', () => {
     })
   })
 
+  it('routes read_document with its paging options to the session tab', async () => {
+    await client2!.callTool({ name: 'create_session', arguments: { family: 'docx' } })
+    const read = await client2!.callTool({
+      name: 'read_document',
+      arguments: { range: '3-10', full: true, maxChars: 500, offset: 24 },
+    })
+    expect(read.isError).toBeFalsy()
+    // the location + paging arguments reach the renderer, which is what turns
+    // the default overview into a full, paged read of those blocks
+    expect(fake.calls.at(-1)).toEqual({
+      wcId: 42,
+      command: 'read_document',
+      payload: { range: '3-10', full: true, maxChars: 500, offset: 24 },
+    })
+  })
+
+  it('read_document with no location argument keeps the overview payload', async () => {
+    await client2!.callTool({ name: 'create_session', arguments: { family: 'docx' } })
+    await client2!.callTool({ name: 'read_document', arguments: {} })
+    expect(fake.calls.at(-1)).toEqual({
+      wcId: 42,
+      command: 'read_document',
+      payload: { range: undefined, full: false, maxChars: undefined, offset: undefined },
+    })
+  })
+
   it('save_session forwards path + overwrite and ends the session', async () => {
     await client2!.callTool({ name: 'create_session', arguments: { family: 'docx' } })
     const target = join(dir2, 'out.docx')

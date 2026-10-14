@@ -35,6 +35,12 @@ export interface McpSheetHandlers {
   context: () => unknown
   /** values + formulas for the requested A1 addresses */
   readCells: (addresses: string[], sheetId?: string) => unknown
+  /** read a rectangular A1 range as a value grid + formulas keyed by address, paged by rows (the CLI's `sheet read --range`) */
+  readRange: (
+    range: string,
+    sheetId: string | undefined,
+    opts: { maxRows?: number },
+  ) => unknown | Promise<unknown>
   /** the workbook's worksheets, for resolving name-addressed ops */
   sheets: () => readonly SheetRef[]
   /** apply a workbook DSL batch (planFromOps + applyChangePlan) */
@@ -141,6 +147,18 @@ export function installSheetsMcpBridge(handlers: McpSheetHandlers): () => void {
           )
           if (!resolved.ok) {
             reply(false, undefined, resolved.error)
+            return
+          }
+          // A named A1 area takes the range read (the CLI's `sheet read --range`),
+          // which pages a tall grid; the flat address list and the overview follow.
+          const range = typeof payload.range === 'string' ? payload.range.trim() : ''
+          if (range) {
+            reply(
+              true,
+              await handlers.readRange(range, resolved.sheetId, {
+                ...(typeof payload.maxRows === 'number' ? { maxRows: payload.maxRows } : {}),
+              }),
+            )
             return
           }
           if (addresses.length > 0) {
