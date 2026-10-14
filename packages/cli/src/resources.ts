@@ -90,6 +90,16 @@ export function bundledSkillPath(): string | null {
   return candidates.find((p) => existsSync(p)) ?? null
 }
 
+/** office-daemon.cjs as shipped beside this bundle (Resources/cli) or built in the checkout. */
+export function daemonBundlePath(): string | null {
+  const packaged = packagedResourcesDir()
+  const candidates = [
+    ...(packaged ? [join(packaged, 'cli', 'office-daemon.cjs')] : []),
+    ...(repoRoot() ? [join(repoRoot()!, 'packages', 'daemon', 'dist', 'office-daemon.cjs')] : []),
+  ]
+  return candidates.find((p) => existsSync(p)) ?? null
+}
+
 export interface AppLaunch {
   command: string
   args: string[]

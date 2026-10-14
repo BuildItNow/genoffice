@@ -7,6 +7,7 @@ import { capabilitiesCommand } from './commands/capabilities'
 import { convertCommand } from './commands/convert'
 import { docsCommand } from './commands/docs'
 import { createCommand } from './commands/create'
+import { daemonCommand } from './commands/daemon'
 import { guideCommand } from './commands/guide'
 import { imageCommand } from './commands/image'
 import { mediaCommand } from './commands/media'
@@ -69,6 +70,7 @@ export function defaultRegistry(): CommandRegistry {
     .register(selectionCommand)
     .register(capabilitiesCommand)
     .register(installCommand)
+    .register(daemonCommand)
     .register(mcpCommand)
     .register(skillCommand)
 }

@@ -55,6 +55,7 @@ genoffice mcp --http 3000 [--host 127.0.0.1] [--token secret]   # Streamable HTT
 genoffice mcp --compact-schemas   # advertise ops/cells/data as plain arrays instead of the per-op schema (smaller tools/list; also GENOFFICE_MCP_COMPACT_SCHEMAS=1)
 genoffice mcp install all   # register the stdio server with every coding agent found (or one: claude-code, codex, cursor, gemini, copilot, opencode, windsurf)
 genoffice mcp list          # each agent's MCP config and whether genoffice is registered; `mcp uninstall <agent>` removes the entry
+genoffice daemon [--cli]    # the app-aware MCP server on stdio: drive the open documents (office_gui_*, app started on demand); --cli adds the headless office_cli_* family
 ```
 
 Word and Markdown commands run the docs and markdown editors under jsdom (installed once per process, loaded lazily). Those modules are imported from the app renderers by relative path until they move into packages of their own.
@@ -175,6 +176,27 @@ are not registered;
 with `GENOFFICE_ALLOWED_ROOTS` unset the tools are confined to the server's
 file store.
 
+### `genoffice daemon` — the app-aware server
+
+`genoffice mcp` works on files on disk and never needs the window. `genoffice
+daemon` is the other half: on stdio it serves the tools that drive GenOffice
+itself — the documents the user has open and their live editors, as
+`office_gui_*` (list, read, search and edit what is on screen), starting the
+app on demand when a GUI tool is first called. It is the same server the
+packaged app ships as `Resources/cli/office-daemon.cjs`; the subcommand runs
+that bundle through the `genoffice` already on the PATH, so a client needs no
+second command:
+
+```json
+{ "mcpServers": { "genoffice": { "command": "genoffice", "args": ["daemon"] } } }
+```
+
+The headless family `genoffice mcp` exposes is also served, as `office_cli_*`,
+but off by default: pass `--cli` (or `GENOFFICE_MCP_CLI=1`) to add it.
+`--compact-schemas` applies to those tools exactly as it does for `genoffice
+mcp`. The daemon keeps the stdio connection open across the app's restarts, so
+a client stays attached to the live documents without relaunching anything.
+
 ## Putting genoffice on the PATH
 
 - **macOS**: the app tries to symlink `/usr/local/bin/genoffice` (or `/opt/homebrew/bin/genoffice`) on every launch until one succeeds. If neither directory is writable it stays silent; run `genoffice install-cli` from the launcher, or `sudo mkdir -p /usr/local/bin && sudo ln -sf "/Applications/GenOffice.app/Contents/Resources/cli/genoffice" /usr/local/bin/genoffice`.
@@ -191,7 +213,7 @@ Independently of the PATH, every launch of the packaged app writes the launcher 
 - `src/registry.ts` — `CommandDef` table (`name`, `usage`, `run`), the single
   place future entry points (in-app AI, MCP) dispatch through.
 - `src/commands/` — `info`, `convert`, `create`, `render`, `slides`, `sheet`, `docs`,
-  `guide`, `open`, `capabilities`, `search`, `image`, `media`, `install-cli`.
+  `guide`, `open`, `capabilities`, `search`, `image`, `media`, `install-cli`, `daemon`.
 - `src/dom.ts` — the jsdom bootstrap the Word/Markdown paths need.
 - `src/formats/` — thin adapters over `@genoffice/pdf2docx`, the xlsx sidecar
   and the sheets CSV importer.
