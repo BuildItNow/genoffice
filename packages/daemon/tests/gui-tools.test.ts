@@ -82,4 +82,12 @@ describe('gui tool table', () => {
     expect(z.object(tool!.shape).safeParse({}).success).toBe(false)
     expect(tool?.adapt).toBeTypeOf('function')
   })
+
+  it('keeps read_pdf’s bounded read: pages is accepted and forwarded', () => {
+    const tool = GUI_TOOLS.find((t) => t.name === 'office_gui_read_pdf')!
+    // the upstream read_pdf takes `pages`; dropping it here would silently
+    // force every daemon read to extract the whole document
+    expect(tool.shape).toHaveProperty('pages')
+    expect(z.object(tool.shape).safeParse({ document: 'x', pages: '1-5,8' }).success).toBe(true)
+  })
 })
