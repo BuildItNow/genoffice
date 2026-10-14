@@ -239,9 +239,19 @@ export const GUI_TOOLS: GuiToolSpec[] = [
       'Read an open PDF — the same shape as the other visible-document reads, but a PDF has no ' +
       'live editor state (the pdf app is a viewer), so this reads its file. Pass the PDF as ' +
       '`document` (its tab id or path). Returns page count, metadata, and per-page text with ' +
-      'page size; scanned pages come back with empty text and hasTextLayer:false.',
-    shape: { document: pdfDocumentField },
-    adapt: async (args, upstream) => ({ path: await resolveReadPdfPath(upstream, args.document) }),
+      'page size; scanned pages come back with empty text and hasTextLayer:false. Use `pages` ' +
+      'for a bounded read.',
+    shape: {
+      document: pdfDocumentField,
+      pages: z
+        .string()
+        .optional()
+        .describe('1-based pages to read, e.g. "3" or "1-5,8"; default is the whole document'),
+    },
+    adapt: async (args, upstream) => ({
+      path: await resolveReadPdfPath(upstream, args.document),
+      pages: args.pages,
+    }),
   },
 ]
 
