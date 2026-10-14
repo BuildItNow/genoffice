@@ -1,11 +1,9 @@
 import { flagBool, flagString, type ParsedArgs } from './args'
 import { CliError, EXIT } from './result'
 
-/** Clip to `max` characters; the marker names how much is missing so a reader can decide whether to fetch it. */
-export function clipText(text: string, max: number): { text: string; truncated: boolean } {
-  if (text.length <= max) return { text, truncated: false }
-  return { text: `${text.slice(0, max)}…(+${text.length - max} chars)`, truncated: true }
-}
+// The clip marker is shared with the app's MCP reads (`@genoffice/pptx-ops`), so a
+// preview reads the same whether it came from the CLI or an open tab.
+export { clipText } from '@genoffice/pptx-ops'
 
 /** `--full` lifts the cap, `--max-chars n` moves it. */
 export function previewChars(args: ParsedArgs, fallback: number): number {

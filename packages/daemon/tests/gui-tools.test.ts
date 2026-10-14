@@ -90,4 +90,13 @@ describe('gui tool table', () => {
     expect(tool.shape).toHaveProperty('pages')
     expect(z.object(tool.shape).safeParse({ document: 'x', pages: '1-5,8' }).success).toBe(true)
   })
+
+  it('keeps read_sheet’s range read: range and maxRows are accepted and forwarded', () => {
+    const tool = GUI_TOOLS.find((t) => t.name === 'office_gui_read_sheet')!
+    // the upstream read_sheet takes `range`/`maxRows`; dropping them here would
+    // force every daemon range read back to the ≤100-address path
+    expect(tool.shape).toHaveProperty('range')
+    expect(tool.shape).toHaveProperty('maxRows')
+    expect(z.object(tool.shape).safeParse({ range: 'A1:D20', maxRows: 5 }).success).toBe(true)
+  })
 })

@@ -98,7 +98,10 @@ export const GUI_TOOLS: GuiToolSpec[] = [
       'id from "list". To edit one, pass its id/path as the `document` argument of a content tool.',
     shape: {
       action: z.enum(['list', 'read', 'save', 'close']).describe('what to do'),
-      target: z.string().optional().describe('path or tab id; required for "read", "save" and "close"'),
+      target: z
+        .string()
+        .optional()
+        .describe('path or tab id; required for "read", "save" and "close"'),
       unsaved: z
         .enum(['save', 'discard'])
         .optional()
@@ -129,9 +132,32 @@ export const GUI_TOOLS: GuiToolSpec[] = [
     upstream: 'read_document',
     readOnly: true,
     description:
-      'Read the visible document as a block list: one "index|type|text" line per block, where the ' +
-      'index is what apply_ops and insert_content address. An overview, not a lossless copy.',
-    shape: { document: documentField },
+      'Read the visible document. By default an overview: a block list (one "index|type|text" line per ' +
+      'block, where the index is what apply_ops and insert_content address) plus text stats and the ' +
+      'current selection; long blocks are clipped. Pass `range` (0-based block indexes, e.g. "3" or ' +
+      '"3-10") and/or `full` to read the full text as restricted HTML — a long range is paged, and the ' +
+      'result names the `offset` to continue from. `maxChars` moves the page size.',
+    shape: {
+      document: documentField,
+      range: z
+        .string()
+        .optional()
+        .describe('0-based block index range to read, e.g. "3" or "3-10"; default is every block'),
+      full: z
+        .boolean()
+        .optional()
+        .describe('read the whole range in one page instead of paging it'),
+      maxChars: z
+        .number()
+        .int()
+        .optional()
+        .describe('page size in characters (default 24000); ignored when full is true'),
+      offset: z
+        .number()
+        .int()
+        .optional()
+        .describe('character offset to continue a paged read (default 0)'),
+    },
   },
   {
     name: 'office_gui_insert_content',
@@ -180,13 +206,27 @@ export const GUI_TOOLS: GuiToolSpec[] = [
     upstream: 'read_sheet',
     readOnly: true,
     description:
-      'Read the visible workbook: sheet names with data extents, and optionally the values/formulas ' +
-      'of specific cells. Address a worksheet by NAME or by the sheetId the overview reports.',
+      'Read the visible workbook. By default an overview: sheet names with data extents. `range` reads ' +
+      'a rectangular A1 area (e.g. "A1:D20") as a value grid with formulas keyed by address — the same ' +
+      'read as the CLI `sheet read --range`; a tall grid is paged by rows and the result names the ' +
+      'range to continue from. `addresses` reads up to 100 scattered cells instead.',
     shape: {
+      range: z
+        .string()
+        .optional()
+        .describe('A1 range to read, e.g. "A1:D20" or "B2"; returns a value grid with formulas'),
+      maxRows: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'page the range: stop after this many rows; the result names the range to continue from',
+        ),
       addresses: z
         .array(z.string())
         .optional()
-        .describe('A1 addresses to read (values + formulas, at most 100); omit for the overview'),
+        .describe('A1 addresses to read (values + formulas, at most 100); use `range` for an area'),
       sheet: z.string().optional().describe('worksheet name; default is the active sheet'),
       sheetId: z.string().optional().describe('worksheet id as an alternative to `sheet`'),
       document: documentField,
@@ -211,8 +251,26 @@ export const GUI_TOOLS: GuiToolSpec[] = [
     readOnly: true,
     description:
       'Read the visible presentation: every slide with its elements (ids, types, text, geometry). ' +
-      'Ids and slide indexes are what apply_slide_ops addresses; geometry is document-space EMU.',
-    shape: { document: documentField },
+      'Ids and slide indexes are what apply_slide_ops addresses; geometry is document-space EMU. ' +
+      'Text and table rows are previewed (clipped) by default; pass full:true for whole text and ' +
+      'every table row, maxChars to move the clip, slide to read one slide (0-based).',
+    shape: {
+      document: documentField,
+      slide: z
+        .number()
+        .int()
+        .optional()
+        .describe('0-based slide index to read; default every slide'),
+      full: z
+        .boolean()
+        .optional()
+        .describe('return whole text and every table row (no preview clipping)'),
+      maxChars: z
+        .number()
+        .int()
+        .optional()
+        .describe('clip text to this many characters; default 300; ignored when full is true'),
+    },
   },
   {
     name: 'office_gui_apply_slide_ops',
@@ -238,15 +296,20 @@ export const GUI_TOOLS: GuiToolSpec[] = [
     description:
       'Read an open PDF — the same shape as the other visible-document reads, but a PDF has no ' +
       'live editor state (the pdf app is a viewer), so this reads its file. Pass the PDF as ' +
-      '`document` (its tab id or path). Returns page count, metadata, and per-page text with ' +
-      'page size; scanned pages come back with empty text and hasTextLayer:false. Use `pages` ' +
-      'for a bounded read.',
+      '`document` (its tab id or path). By default a preview: page count, metadata and the first ' +
+      'few pages\' text, each clipped with a `…(+N chars)` marker. Pass `pages` (e.g. "1-5,8") to ' +
+      'read those pages in full — one call reads at most 20 pages and the result names the ' +
+      '`nextPages` to continue from (pages past the end are ignored); scanned pages come back with ' +
+      'empty text and hasTextLayer:false.',
     shape: {
       document: pdfDocumentField,
       pages: z
         .string()
         .optional()
-        .describe('1-based pages to read, e.g. "3" or "1-5,8"; default is the whole document'),
+        .describe(
+          '1-based pages to read, e.g. "3" or "1-5,8" (at most 20 per call; pages past the end ' +
+            'are ignored); omit for the preview (first pages, clipped)',
+        ),
     },
     adapt: async (args, upstream) => ({
       path: await resolveReadPdfPath(upstream, args.document),

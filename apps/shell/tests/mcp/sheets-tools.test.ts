@@ -193,7 +193,13 @@ function fakeSheetsControl(): { control: SheetsControl; saved: Array<{ path: str
       openBlankTab: async () => nextId++,
       runCommand: async (wcId, command, payload) => {
         if (wcId <= 0) throw new Error('no workbook')
-        const p = payload as { path?: string; addresses?: string[]; ops?: unknown[] }
+        const p = payload as {
+          path?: string
+          addresses?: string[]
+          range?: string
+          maxRows?: number
+          ops?: unknown[]
+        }
         if (command === 'save_sheet') {
           // match on the file name, not a literal path: the sentinel has to be a
           // real absolute path on every platform to get past the tool's guard
@@ -203,6 +209,21 @@ function fakeSheetsControl(): { control: SheetsControl; saved: Array<{ path: str
           return { ok: true, path: p.path }
         }
         if (command === 'read_sheet') {
+          // the range read pages by rows; the fake reports a 20-row range so the
+          // test can see the continuation note reflected back
+          if (p.range) {
+            const rowsShown = p.maxRows ?? 20
+            return {
+              sheet: 'Data',
+              range: p.range,
+              rows: [[1, 2, null, 4]],
+              formulas: {},
+              rowsShown,
+              rowsTotal: 20,
+              truncated: rowsShown < 20,
+              ...(rowsShown < 20 ? { note: 'continue with range:"A6:D20"' } : {}),
+            }
+          }
           return p.addresses?.length
             ? { cells: { A1: { value: 'hello', rawValue: 'hello' } } }
             : { context: { sheetId: 's1', wc: wcId, sheets: [] } }
@@ -290,6 +311,35 @@ describe('visible grid session tools', () => {
     })
     expect(saved.isError).toBe(true)
     expect(text(saved.content)).toMatch(/already exists/)
+  })
+
+  it('routes a range read with its paging option to the session tab', async () => {
+    const fake = fakeSheetsControl()
+    await startService(sessionSurface(fake.control))
+    await client!.callTool({ name: 'create_session', arguments: { family: 'xlsx' } })
+
+    const read = await client!.callTool({
+      name: 'read_sheet',
+      arguments: { range: 'A1:D20', maxRows: 5 },
+    })
+    expect(read.isError).toBeFalsy()
+    const payload = JSON.parse(text(read.content)) as {
+      range: string
+      rowsShown: number
+      rowsTotal: number
+      note?: string
+    }
+    expect(payload.rowsTotal).toBe(20)
+    expect(payload.rowsShown).toBe(5)
+    expect(payload.note).toContain('continue with range')
+
+    // a range and a scattered address list are mutually exclusive
+    const both = await client!.callTool({
+      name: 'read_sheet',
+      arguments: { range: 'A1:D2', addresses: ['A1'] },
+    })
+    expect(both.isError).toBe(true)
+    expect(text(both.content)).toMatch(/not both/)
   })
 
   it('disappear entirely without a control (headless runs keep the file-only surface)', async () => {

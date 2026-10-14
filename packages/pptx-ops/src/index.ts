@@ -1,4 +1,5 @@
 export * from './ops'
+export * from './read'
 export { mapScriptOps } from './ops/script-map'
 export * from './edit-text'
 export * from './op-docs'

@@ -16,6 +16,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@genoffice/agent-core": "*",
     "@genoffice/docx-engine": "*",
     "@genoffice/pptx-engine": "*"
   },

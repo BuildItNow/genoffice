@@ -3,6 +3,7 @@
   "compilerOptions": {
     "types": ["node"],
     "paths": {
+      "@genoffice/agent-core/redact-core": ["../agent-core/src/redact-core.ts"],
       "@genoffice/pptx-engine": ["../pptx-engine/src/index.ts"],
       "@genoffice/pptx-engine/table-grid": ["../pptx-engine/src/table-grid.ts"],
       "@genoffice/pptx-engine/identity": ["../pptx-engine/src/identity.ts"],

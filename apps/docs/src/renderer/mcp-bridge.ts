@@ -2,7 +2,8 @@ import type { Editor } from '@tiptap/react'
 import { BLANK_BULLET_NUM_ID, BLANK_ORDERED_NUM_ID } from '@genoffice/docx-engine'
 import type { McpCommandMessage, McpEditorCommand } from '../shared/ipc'
 import { executeTool, markDocSeen } from './ai/tools'
-import { findNumId, type NumIds } from './ai/protocol'
+import { findNumId, serializeRangeToHtml, type NumIds } from './ai/protocol'
+import { isTrackedDeleted } from './ai/doc-utils'
 import { save, type FileActionContext } from './file-actions'
 
 /**
@@ -45,6 +46,36 @@ interface ReplaceBlocksInput {
 interface ApplyOpsInput {
   ops: unknown[]
   dryRun?: boolean
+}
+interface ReadDocumentInput {
+  /** 0-based block index range: "3" or "3-10"; omitted = every block */
+  range?: string
+  /** whole range in one page instead of paging it */
+  full?: boolean
+  /** page size in characters when not full */
+  maxChars?: number
+  /** character offset to continue a paged read */
+  offset?: number
+}
+
+/** read_document paging: the in-app read_blocks page size, and the CLI's --max-chars cap. */
+const READ_PAGE_CHARS = 24_000
+const READ_MAX_CHARS = 1_000_000
+
+/** parse a CLI-style block range ("3" | "3-10") into 0-based inclusive indexes; default = whole body */
+function parseBlockRange(spec: string | undefined, count: number): { start: number; end: number } {
+  if (spec === undefined || spec.trim() === '') return { start: 0, end: count - 1 }
+  const m = /^(\d+)(?:-(\d+))?$/.exec(spec.trim())
+  if (!m)
+    throw new Error(`range must look like "3" or "3-10" (0-based block indexes), got "${spec}"`)
+  const start = Number(m[1])
+  const end = m[2] === undefined ? start : Number(m[2])
+  if (start > end || end >= count) {
+    throw new Error(
+      `range "${spec}" is out of bounds (the document has ${count} blocks, 0-${count - 1})`,
+    )
+  }
+  return { start, end }
 }
 
 /** mirror of AiPanel's clearAiHighlights: auto-accept the external edit, keeping undo history */
@@ -147,13 +178,64 @@ async function runCommand(
     }
 
     case 'read_document': {
-      const outcome = await executeTool(
-        editor,
-        { id: 'mcp', name: 'get_document_context', input: {} },
-        numIdsFor(ctx),
-      )
-      if (outcome.isError) throw new Error(mcpErrorText(outcome.output))
-      return { text: outcome.output }
+      const input = (payload ?? {}) as ReadDocumentInput
+      // No location argument keeps the live overview (block list preview + stats +
+      // selection — context only an open editor has). A range/full/maxChars/offset
+      // switches to a lossless, paged read of the range as restricted HTML.
+      const ranged =
+        input.range !== undefined ||
+        input.full === true ||
+        input.maxChars !== undefined ||
+        input.offset !== undefined
+      if (!ranged) {
+        const outcome = await executeTool(
+          editor,
+          { id: 'mcp', name: 'get_document_context', input: {} },
+          numIdsFor(ctx),
+        )
+        if (outcome.isError) throw new Error(mcpErrorText(outcome.output))
+        return { text: outcome.output }
+      }
+      const count = editor.state.doc.childCount
+      const { start, end } = parseBlockRange(input.range, count)
+      const html = serializeRangeToHtml(editor, start, end)
+      const offset = Math.max(0, Math.trunc(Number(input.offset)) || 0)
+      if (offset > 0 && offset >= html.length) {
+        throw new Error(`offset ${offset} is beyond the range content (${html.length} characters)`)
+      }
+      const maxChars = Math.trunc(Number(input.maxChars)) || 0
+      if (maxChars > READ_MAX_CHARS) {
+        throw new Error(`maxChars must be a positive integer up to ${READ_MAX_CHARS}`)
+      }
+      // --full lifts the cap; otherwise a page keeps the read small enough to
+      // leave context for the rest of the work (maxChars moves it)
+      const budget = input.full === true ? Number.POSITIVE_INFINITY : maxChars || READ_PAGE_CHARS
+      const slice = html.slice(offset, offset + budget)
+      const next = offset + slice.length
+      const note =
+        next < html.length
+          ? `\n…(+${html.length - next} chars; call read_document again with range:"${start}-${end}" offset=${next} to continue)`
+          : offset > 0
+            ? `\n(end of range: ${html.length} characters in total)`
+            : ''
+      let text = slice + note
+      if (!slice) {
+        let deleted = 0
+        for (let i = start; i <= end; i++) {
+          if (isTrackedDeleted(editor.state.doc.child(i))) deleted++
+        }
+        text =
+          deleted > 0
+            ? `(the ${deleted} block(s) in this range are pending tracked deletions — that text is already deleted and hidden from reads; do not rewrite it)`
+            : '(range is empty)'
+      }
+      return {
+        text,
+        blocks: count,
+        range: `${start}-${end}`,
+        total: html.length,
+        ...(next < html.length ? { offset: next } : {}),
+      }
     }
 
     case 'save_document': {

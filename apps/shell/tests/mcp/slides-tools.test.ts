@@ -268,11 +268,17 @@ describe('headless create_pptx', () => {
 })
 
 /** In-memory SlidesControl standing in for the shell's slides-bridge */
-function fakeSlidesControl(): { control: SlidesControl; saved: Array<{ path: string }> } {
+function fakeSlidesControl(): {
+  control: SlidesControl
+  saved: Array<{ path: string }>
+  reads: Array<{ wcId: number; opts: unknown }>
+} {
   let nextId = 1
   const saved: Array<{ path: string }> = []
+  const reads: Array<{ wcId: number; opts: unknown }> = []
   return {
     saved,
+    reads,
     control: {
       openBlankTab: async () => nextId++,
       runTxn: async (wcId, req) => {
@@ -283,7 +289,10 @@ function fakeSlidesControl(): { control: SlidesControl; saved: Array<{ path: str
         }
         return { applied: true, records: ops.map((o) => ({ op: o.op })) }
       },
-      readDeck: async (wcId) => ({ slides: [{ index: 0, wc: wcId, elements: [] }] }),
+      readDeck: async (wcId, opts) => {
+        reads.push({ wcId, opts })
+        return { slides: [{ index: 0, wc: wcId, elements: [] }] }
+      },
       saveDeck: async (wcId, path) => {
         if (wcId <= 0) throw new Error('no deck')
         saved.push({ path })
@@ -342,6 +351,21 @@ describe('visible deck session tools', () => {
     })
     expect(after.isError).toBe(true)
     expect(text(after.content)).toMatch(/no session is open/)
+  })
+
+  it('forwards read_deck paging options to the control', async () => {
+    const fake = fakeSlidesControl()
+    await startService(sessionSurface(fake.control))
+    await client!.callTool({ name: 'create_session', arguments: { family: 'pptx' } })
+
+    const read = await client!.callTool({
+      name: 'read_deck',
+      arguments: { slide: 2, full: true, maxChars: 500 },
+    })
+    expect(read.isError).toBeFalsy()
+    // the session's tab id plus every read option reach the control, which is
+    // what turns the default preview into a full, single-slide read
+    expect(fake.reads.at(-1)).toEqual({ wcId: 1, opts: { slide: 2, full: true, maxChars: 500 } })
   })
 
   it('surfaces failed transactions as errors, keeps dry runs successful, caps batch size', async () => {

@@ -13,6 +13,8 @@ import { createPdfTools, parsePageList } from '../../src/main/mcp/tools/pdf-tool
 
 let dir: string
 let threePages: string
+let longFirstPage: string
+let manyPages: string
 let corrupt: string
 
 async function buildFixturePdf(path: string): Promise<void> {
@@ -32,6 +34,19 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'genoffice-mcp-pdf-'))
   threePages = join(dir, 'three-pages.pdf')
   await buildFixturePdf(threePages)
+  // one long page, so the default preview's per-page clip is exercised
+  longFirstPage = join(dir, 'long-first.pdf')
+  const long = await PDFDocument.create()
+  const longFont = await long.embedFont(StandardFonts.Helvetica)
+  long.addPage([400, 300]).drawText('A'.repeat(3000), { x: 10, y: 200, size: 6, font: longFont })
+  await writeFile(longFirstPage, await long.save())
+  // more pages than one read window, so the 20-page cap is exercised
+  manyPages = join(dir, 'many-pages.pdf')
+  const many = await PDFDocument.create()
+  const manyFont = await many.embedFont(StandardFonts.Helvetica)
+  for (let i = 1; i <= 25; i++)
+    many.addPage([400, 300]).drawText(`Page ${i}`, { x: 40, y: 200, size: 14, font: manyFont })
+  await writeFile(manyPages, await many.save())
   corrupt = join(dir, 'corrupt.pdf')
   await writeFile(corrupt, Buffer.from('this is not a pdf at all'))
 })
@@ -93,11 +108,15 @@ describe('parsePageList', () => {
     expect(parsePageList('1-3, 7', 10)).toEqual([1, 2, 3, 7])
     expect(parsePageList('7,1-3,7', 10)).toEqual([1, 2, 3, 7])
   })
-  it('rejects junk, inverted ranges and out-of-range pages', () => {
+  it('rejects junk, inverted ranges and empty specs', () => {
     expect(() => parsePageList('x', 10)).toThrow(/invalid page/)
     expect(() => parsePageList('5-2', 10)).toThrow(/must not precede start/)
-    expect(() => parsePageList('11', 10)).toThrow(/out of range/)
     expect(() => parsePageList(' , ', 10)).toThrow(/at least one page/)
+  })
+  it('drops out-of-range pages instead of refusing them', () => {
+    // a fixed window can run past the end of a shorter document
+    expect(parsePageList('2-9', 3)).toEqual([2, 3])
+    expect(parsePageList('9', 3)).toEqual([])
   })
 })
 
@@ -112,16 +131,32 @@ describe('read_pdf tool', () => {
     await expect(handler({ path: join(dir, 'nope.pdf') })).rejects.toThrow(/file not found/)
   })
 
-  it('returns the whole document by default', async () => {
+  it('returns a preview (page count + metadata + first pages) by default', async () => {
     const out = (await handler({ path: threePages })) as {
       pageCount: number
-      pages: Array<{ page: number; text: string }>
-      truncated: boolean
+      info: { title?: string; author?: string }
+      pages: Array<{ page: number; text: string; hasTextLayer: boolean }>
     }
     expect(out.pageCount).toBe(3)
+    expect(out.info.title).toBe('MCP Fixture')
+    expect(out.info.author).toBe('GenOffice Tests')
+    // the opening pages, so the agent learns what the document is
     expect(out.pages.map((p) => p.page)).toEqual([1, 2, 3])
     expect(out.pages[0]!.text).toContain('Hello MCP PDF')
-    expect(out.truncated).toBe(false)
+    expect(out.pages[0]!.hasTextLayer).toBe(true)
+    // nothing left to preview: this document is only 3 pages
+    expect(out).not.toHaveProperty('nextPages')
+    expect(out).not.toHaveProperty('note')
+  })
+
+  it('clips each preview page with the shared marker', async () => {
+    const out = (await handler({ path: longFirstPage })) as {
+      pages: Array<{ page: number; chars: number; text: string }>
+    }
+    // the page holds 3000 chars; the preview keeps 2000 and names the rest
+    expect(out.pages[0]!.chars).toBeGreaterThan(2000)
+    expect(out.pages[0]!.text).toMatch(/…\(\+\d+ chars\)$/)
+    expect(out.pages[0]!.text.slice(0, 2000)).toBe('A'.repeat(2000))
   })
 
   it('reads only the requested pages', async () => {
@@ -134,7 +169,43 @@ describe('read_pdf tool', () => {
       pages: Array<{ page: number }>
     }
     expect(sparse.pages.map((p) => p.page)).toEqual([1, 3])
-    await expect(handler({ path: threePages, pages: '9' })).rejects.toThrow(/out of range/)
+    // out-of-range pages are dropped, not refused, so a fixed window can run
+    // past the end of a shorter document
+    const past = (await handler({ path: threePages, pages: '2-9' })) as {
+      pages: Array<{ page: number }>
+    }
+    expect(past.pages.map((p) => p.page)).toEqual([2, 3])
+  })
+
+  it('caps one read at 20 pages and names the next span', async () => {
+    const out = (await handler({ path: manyPages, pages: '1-25' })) as {
+      pageCount: number
+      pages: Array<{ page: number }>
+      truncated: boolean
+      nextPages?: string
+    }
+    expect(out.pageCount).toBe(25)
+    expect(out.pages.map((p) => p.page)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
+    expect(out.truncated).toBe(true)
+    expect(out.nextPages).toBe('21-25')
+    // a window inside the cap is a complete read: no truncation, no next span
+    const rest = (await handler({ path: manyPages, pages: '21-25' })) as {
+      pages: Array<{ page: number }>
+      truncated: boolean
+      nextPages?: string
+    }
+    expect(rest.pages.map((p) => p.page)).toEqual([21, 22, 23, 24, 25])
+    expect(rest.truncated).toBe(false)
+    expect(rest).not.toHaveProperty('nextPages')
+  })
+
+  it('names the next span when the preview leaves pages unread', async () => {
+    const out = (await handler({ path: manyPages })) as {
+      pages: Array<{ page: number }>
+      nextPages?: string
+    }
+    expect(out.pages.map((p) => p.page)).toEqual([1, 2, 3])
+    expect(out.nextPages).toBe('4-23')
   })
 
   it('maps a pdfium load failure to a clean error', async () => {

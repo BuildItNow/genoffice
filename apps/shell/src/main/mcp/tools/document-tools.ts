@@ -340,13 +340,47 @@ function createDocxContentTools(deps: DocToolDeps, host: SessionHost): McpToolDe
     {
       name: 'read_document',
       description:
-        'Read the visible document as a block list: one "index|type|text" line per block, where the ' +
-        'index is what apply_ops and insert_content address. Long blocks are clipped for reading; ' +
-        'the list is an overview, not a lossless copy (use read_docx for full text).',
-      inputSchema: { document: documentField },
+        'Read the visible document. By default it is an overview: a block list (one "index|type|text" ' +
+        'line per block, where the index is what apply_ops and insert_content address) plus text stats ' +
+        'and the current selection; long blocks are clipped. To read the full text, pass `range` ' +
+        '(0-based block indexes, e.g. "3" or "3-10") and/or `full`: the range comes back as restricted ' +
+        'HTML, and a range longer than the page is paged — the result names the `offset` to continue ' +
+        'from, so concatenating the pages yields the whole range. `maxChars` moves the page size. The ' +
+        'range vocabulary matches the genoffice CLI `docs read --range`.',
+      inputSchema: {
+        document: documentField,
+        range: z
+          .string()
+          .optional()
+          .describe(
+            '0-based block index range to read, e.g. "3" or "3-10"; default is every block',
+          ),
+        full: z
+          .boolean()
+          .optional()
+          .describe('read the whole range in one page instead of paging it'),
+        maxChars: z
+          .number()
+          .int()
+          .positive()
+          .max(1_000_000)
+          .optional()
+          .describe('page size in characters (default 24000); ignored when full is true'),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('character offset to continue a paged read (default 0)'),
+      },
       handler: async (args) => {
         const wc = await target(args.document)
-        return docs.runCommand(wc, 'read_document', {})
+        return docs.runCommand(wc, 'read_document', {
+          range: typeof args.range === 'string' ? args.range : undefined,
+          full: args.full === true,
+          maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
+          offset: typeof args.offset === 'number' ? args.offset : undefined,
+        })
       },
     },
   ]

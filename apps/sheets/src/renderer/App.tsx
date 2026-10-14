@@ -141,8 +141,11 @@ import { imageGenerationAvailable, type AiSettings } from '@genoffice/ai-provide
 import { type WorkbookOperation } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
 import {
   columnLabel,
+  formatAddress,
   parseAddress,
+  parseRange,
   rangeCellCount,
+  type RangeBounds,
 } from '@genoffice/xlsx-gateway/domain/cell-address'
 import { aggregateWorkbookRange } from './ai/aggregate-range'
 import { collectCellFormulaTexts, quadraticFormulaError } from './formula-cost'
@@ -1680,6 +1683,93 @@ export function App({
 
   function getActiveSheetInfo(): ActiveSheetInfo {
     return getActiveSheetInfoImpl(readContext(), aiRunScopeRef.current)
+  }
+
+  /**
+   * MCP `read_sheet` range read — the CLI's `sheet read --range` over the live
+   * grid. The A1 range is the location vocabulary; the result is a value grid
+   * plus formulas keyed by address, and a range taller than one call can load is
+   * paged by rows with a "continue with range:<next>" note, so paging through the
+   * pages reads the whole area (the same continuation shape the CLI prints).
+   */
+  async function readSheetRange(
+    rangeSpec: string,
+    sheetId: string | undefined,
+    opts: { maxRows?: number },
+  ): Promise<unknown> {
+    let bounds: RangeBounds
+    try {
+      bounds = parseRange(rangeSpec.trim().toUpperCase())
+    } catch {
+      throw new Error(`invalid range: ${rangeSpec} (use A1 notation like "A1:D20")`)
+    }
+    const width = bounds.endColumn - bounds.startColumn + 1
+    const height = bounds.endRow - bounds.startRow + 1
+    // one call never loads more than the grid's read cap; a taller range pages by
+    // rows instead of being refused
+    const rowsFit = Math.max(1, Math.floor(MAX_READ_RANGE_CELLS / width))
+    const rowsShown = Math.min(height, opts.maxRows ?? height, rowsFit)
+    // stream the requested rows into the grid first — an unloaded lazy block reads as null
+    const runtime = univerRef.current
+    const state = lazyWorkbookRef.current
+    const workbook = runtime?.univerAPI.getActiveWorkbook()
+    const worksheet =
+      sheetId === undefined ? workbook?.getActiveSheet() : workbook?.getSheetBySheetId(sheetId)
+    if (state && !state.flags.preloadComplete && runtime && worksheet) {
+      const inFile = state.file.sheets.some((sheet) => sheet.id === worksheet.getSheetId())
+      if (inFile) {
+        const loaded = await ensureLazyRangeLoaded(
+          runtime,
+          lazyWorkbookRef,
+          worksheet,
+          { ...bounds, endRow: bounds.startRow + rowsShown - 1 },
+          setMessage,
+        )
+        if (!loaded)
+          throw new Error(
+            'the requested range could not be fully loaded; retry after workbook indexing completes',
+          )
+      }
+    }
+    const addresses: string[] = []
+    for (let r = bounds.startRow; r < bounds.startRow + rowsShown; r++) {
+      for (let c = bounds.startColumn; c <= bounds.endColumn; c++)
+        addresses.push(formatAddress(r, c))
+    }
+    const cells = readCellsImpl(readContext(), addresses, sheetId)
+    const rows: unknown[][] = []
+    const formulas: Record<string, string> = {}
+    for (let r = 0; r < rowsShown; r++) {
+      const row: unknown[] = []
+      for (let c = 0; c < width; c++) {
+        const address = formatAddress(bounds.startRow + r, bounds.startColumn + c)
+        const cell = cells[address]
+        // the model value, not the rendered text a number format produced — the
+        // same convention the scattered `addresses` read reports
+        row.push(cell ? (modelCellValue(cell) ?? null) : null)
+        if (cell?.formula)
+          formulas[address] = cell.formula.startsWith('=') ? cell.formula : `=${cell.formula}`
+      }
+      rows.push(row)
+    }
+    const info = getActiveSheetInfo()
+    const target = info.sheets.find((sheet) => sheet.id === (sheetId ?? info.sheetId))
+    const lastRow = bounds.startRow + rowsShown - 1
+    const shownRange = `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:${columnLabel(bounds.endColumn)}${lastRow + 1}`
+    const truncated = rowsShown < height
+    const nextRange = `${columnLabel(bounds.startColumn)}${lastRow + 2}:${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`
+    return {
+      sheet: target?.name,
+      range: shownRange,
+      rows,
+      formulas,
+      rowsShown,
+      rowsTotal: height,
+      truncated,
+      ...(truncated
+        ? { note: `${rowsShown} of ${height} rows shown; continue with range:"${nextRange}"` }
+        : {}),
+    }
   }
 
   function sheetsSkillDeps(): SheetsSkillDeps {
@@ -4718,6 +4808,7 @@ export function App({
         }),
       )
     },
+    readRange: (range, sheetId, opts) => readSheetRange(range, sheetId, opts),
     sheets: () => getActiveSheetInfo().sheets.map((sheet) => ({ id: sheet.id, name: sheet.name })),
     // The user is watching this grid, so an edit to a sheet the view is not
     // showing would otherwise land invisibly. Switch the tab and bring the
@@ -4801,6 +4892,7 @@ export function App({
       hasWorkbook: () => handlers.current?.hasWorkbook() ?? false,
       context: () => handlers.current?.context(),
       readCells: (addresses, sheetId) => handlers.current?.readCells(addresses, sheetId) ?? {},
+      readRange: (range, sheetId, opts) => handlers.current?.readRange(range, sheetId, opts),
       sheets: () => handlers.current?.sheets() ?? [],
       focusSheet: (sheetId, address) => handlers.current?.focusSheet(sheetId, address),
       applyOps: async (ops, dryRun) =>
