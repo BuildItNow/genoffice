@@ -53,7 +53,7 @@ export interface SheetsControl {
   /** run one command in that tab and resolve its result */
   runCommand: (
     wcId: number,
-    command: 'apply_ops' | 'read_sheet' | 'save_sheet',
+    command: 'apply_ops' | 'read_sheet' | 'search_sheet' | 'save_sheet',
     payload: unknown,
   ) => Promise<unknown>
 }
@@ -229,6 +229,64 @@ function createGridContentTools(deps: SheetsToolDeps, host: SessionHost): McpToo
           ...(typeof args.sheetId === 'string' ? { sheetId: args.sheetId } : {}),
         }
         return sheets.runCommand(wc, 'read_sheet', payload)
+      },
+    },
+    {
+      name: 'search_sheet',
+      description:
+        'Search inside the visible workbook and return every hit, addressed the way read_sheet ' +
+        'addresses cells — {sheet, address, value, formula?} — so a hit feeds straight into ' +
+        'read_sheet { addresses: [address] }. `range` scopes the search to an A1 area ("A1:D20"); ' +
+        'sheet/sheetId pick one worksheet. regex treats `query` as a regular expression; lookIn ' +
+        'chooses values, formulas or both (default both). Matching is case-insensitive. maxResults ' +
+        'caps the returned hits (default 100, max 500).',
+      inputSchema: {
+        document: documentField,
+        query: z.string().describe('the text to find'),
+        range: z
+          .string()
+          .optional()
+          .describe('scope the search to an A1 area, e.g. "A1:D20"; default is the whole sheet'),
+        sheet: z
+          .string()
+          .optional()
+          .describe('worksheet name to search; default is every worksheet in the workbook'),
+        sheetId: z
+          .string()
+          .optional()
+          .describe('worksheet id (from read_sheet) as an alternative to `sheet`'),
+        regex: z
+          .boolean()
+          .optional()
+          .describe('treat `query` as a regular expression instead of literal text'),
+        lookIn: z
+          .enum(['values', 'formulas', 'both'])
+          .optional()
+          .describe('match values, formulas, or both (default both)'),
+        maxResults: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('cap on returned hits (default 100, max 500)'),
+      },
+      handler: async (args) => {
+        const query = String(args.query ?? '')
+        if (!query) throw new Error('query must not be empty')
+        const wc = await target(args.document)
+        return sheets.runCommand(wc, 'search_sheet', {
+          query,
+          ...(typeof args.range === 'string' && args.range.trim()
+            ? { range: args.range.trim() }
+            : {}),
+          ...(typeof args.sheet === 'string' ? { sheet: args.sheet } : {}),
+          ...(typeof args.sheetId === 'string' ? { sheetId: args.sheetId } : {}),
+          regex: args.regex === true,
+          ...(args.lookIn === 'values' || args.lookIn === 'formulas'
+            ? { lookIn: args.lookIn }
+            : {}),
+          maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
+        })
       },
     },
     {

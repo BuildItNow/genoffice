@@ -45,7 +45,12 @@ export interface DocToolDeps {
 
 /** editor commands the docs renderer bridge understands (see docs shared/ipc.ts) */
 export type McpEditorCommandName =
-  'insert_content' | 'replace_blocks' | 'apply_ops' | 'read_document' | 'save_document'
+  | 'insert_content'
+  | 'replace_blocks'
+  | 'apply_ops'
+  | 'read_document'
+  | 'save_document'
+  | 'search_document'
 
 /**
  * Visible-editor control: opens a docs tab and pushes editor commands into it,
@@ -380,6 +385,58 @@ function createDocxContentTools(deps: DocToolDeps, host: SessionHost): McpToolDe
           full: args.full === true,
           maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
           offset: typeof args.offset === 'number' ? args.offset : undefined,
+        })
+      },
+    },
+    {
+      name: 'search_document',
+      description:
+        'Search inside the visible Word document and return every hit, addressed the way ' +
+        'read_document addresses content — {block, snippet} — so a hit ' +
+        'feeds straight into read_document { range }. Uses the same engine as the in-app Find ' +
+        'panel. `range` scopes the search to a 0-based block index range ("3" or "3-10"); ' +
+        'matchCase, wholeWord and regex tune the match; maxResults caps the hits (default 100, max ' +
+        '500); context is the characters of context around each hit (default 30).',
+      inputSchema: {
+        document: documentField,
+        query: z.string().describe('the text to find'),
+        range: z
+          .string()
+          .optional()
+          .describe(
+            'scope the search to a 0-based block index range, e.g. "3" or "3-10"; default every block',
+          ),
+        matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+        wholeWord: z.boolean().optional().describe('match whole words only'),
+        regex: z
+          .boolean()
+          .optional()
+          .describe('treat `query` as a regular expression instead of literal text'),
+        maxResults: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('cap on returned hits (default 100, max 500)'),
+        context: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('characters of context around each hit (default 30)'),
+      },
+      handler: async (args) => {
+        const query = String(args.query ?? '')
+        if (!query) throw new Error('query must not be empty')
+        const wc = await target(args.document)
+        return docs.runCommand(wc, 'search_document', {
+          query,
+          range: typeof args.range === 'string' ? args.range : undefined,
+          matchCase: args.matchCase === true,
+          wholeWord: args.wholeWord === true,
+          regex: args.regex === true,
+          maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
+          context: typeof args.context === 'number' ? args.context : undefined,
         })
       },
     },

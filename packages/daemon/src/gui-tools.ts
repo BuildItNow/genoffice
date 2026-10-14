@@ -40,7 +40,7 @@ const documentField = z
 const pdfDocumentField = z
   .string()
   .describe(
-    'tab id or path of an open PDF document to read ' +
+    'tab id or path of an open PDF document ' +
       '(from office_gui_opened_documents {action:"list"})',
   )
 
@@ -314,6 +314,155 @@ export const GUI_TOOLS: GuiToolSpec[] = [
     adapt: async (args, upstream) => ({
       path: await resolveReadPdfPath(upstream, args.document),
       pages: args.pages,
+    }),
+  },
+  {
+    name: 'office_gui_search_document',
+    upstream: 'search_document',
+    readOnly: true,
+    description:
+      'Search inside a Word document for text and return every hit, addressed the way ' +
+      'office_gui_read_document addresses content — {block, snippet} — ' +
+      'so a hit feeds straight into office_gui_read_document { range }. Pass `document` to name an ' +
+      'open document (from office_gui_opened_documents {action:"list"}), or omit it to search the ' +
+      "active session's document. `range` scopes the search to a 0-based block index range; " +
+      'matchCase, wholeWord and regex tune the match; maxResults caps the hits (default 100).',
+    shape: {
+      document: documentField,
+      query: z.string().describe('the text to find'),
+      range: z
+        .string()
+        .optional()
+        .describe('scope: a 0-based block index range, e.g. "3" or "3-10"'),
+      matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+      wholeWord: z.boolean().optional().describe('match whole words only'),
+      regex: z
+        .boolean()
+        .optional()
+        .describe('treat `query` as a regular expression instead of literal text'),
+      maxResults: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('cap on returned hits (default 100, max 500)'),
+      context: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('characters of context around each hit (default 30)'),
+    },
+  },
+  {
+    name: 'office_gui_search_sheet',
+    upstream: 'search_sheet',
+    readOnly: true,
+    description:
+      'Search inside an Excel workbook for text and return every hit, addressed the way ' +
+      'office_gui_read_sheet addresses cells — {sheet, address, value, formula?} — so a hit feeds ' +
+      'straight into office_gui_read_sheet { addresses: [address] }. Pass `document` or omit it to ' +
+      "search the active session's workbook. `range` scopes the search to an A1 area; sheet/sheetId " +
+      'pick one worksheet; regex and lookIn tune the match (matching is case-insensitive); ' +
+      'maxResults caps the hits (default 100).',
+    shape: {
+      document: documentField,
+      query: z.string().describe('the text to find'),
+      range: z.string().optional().describe('scope: an A1 area, e.g. "A1:D20"'),
+      sheet: z
+        .string()
+        .optional()
+        .describe('worksheet name to search; default is every worksheet in the workbook'),
+      sheetId: z.string().optional().describe('worksheet id as an alternative to `sheet`'),
+      regex: z
+        .boolean()
+        .optional()
+        .describe('treat `query` as a regular expression instead of literal text'),
+      lookIn: z
+        .enum(['values', 'formulas', 'both'])
+        .optional()
+        .describe('match values, formulas, or both (default both)'),
+      maxResults: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('cap on returned hits (default 100, max 500)'),
+    },
+  },
+  {
+    name: 'office_gui_search_deck',
+    upstream: 'search_deck',
+    readOnly: true,
+    description:
+      'Search inside a PowerPoint presentation for text and return every hit, addressed the way ' +
+      'office_gui_read_deck / office_gui_apply_slide_ops address content — {slide, el, type, ' +
+      'snippet}, a 0-based slide plus element id — so a hit feeds straight into ' +
+      'office_gui_read_deck { slide } or office_gui_apply_slide_ops { slide, el }. Pass `document` ' +
+      "or omit it to search the active session's deck. `slide` scopes the search to one slide; " +
+      'matchCase tunes the match; maxResults caps the hits (default 100).',
+    shape: {
+      document: documentField,
+      query: z.string().describe('the text to find'),
+      slide: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('0-based slide to search; default is every slide'),
+      matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+      maxResults: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('cap on returned hits (default 100, max 500)'),
+      context: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('characters of context around each hit (default 30)'),
+    },
+  },
+  {
+    name: 'office_gui_search_pdf',
+    upstream: 'search_pdf',
+    readOnly: true,
+    description:
+      'Search an open PDF for text and return every hit, addressed the way office_gui_read_pdf ' +
+      'addresses content — {page, snippet} with 1-based pages — so a hit feeds straight ' +
+      'into office_gui_read_pdf { document, pages: String(page) }. Pass the PDF as `document` (its ' +
+      'tab id or path, or an absolute .pdf path for a file that is not open). `pages` scopes the ' +
+      'scan; matchCase tunes the match; maxResults caps the hits (default 100).',
+    shape: {
+      document: pdfDocumentField,
+      query: z.string().describe('the text to find'),
+      pages: z
+        .string()
+        .optional()
+        .describe('1-based pages to scan, e.g. "1-5,8"; default is every page'),
+      matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
+      maxResults: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('cap on returned hits (default 100, max 500)'),
+      context: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('characters of context around each hit (default 30)'),
+    },
+    adapt: async (args, upstream) => ({
+      path: await resolveReadPdfPath(upstream, args.document),
+      query: args.query,
+      pages: args.pages,
+      matchCase: args.matchCase,
+      maxResults: args.maxResults,
+      context: args.context,
     }),
   },
 ]

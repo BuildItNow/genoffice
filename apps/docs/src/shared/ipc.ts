@@ -291,10 +291,17 @@ export interface ZoteroRendererResponse {
  * tab so an external agent drives the *visible* editor instead of writing a file
  * behind it. `insert_content` / `replace_blocks` / `apply_ops` / `read_document`
  * reuse the built-in agent's tool executors; `save_document` writes the live
- * document to an explicit path.
+ * document to an explicit path; `search_document` scans the live document with
+ * the editor's own find engine (editor/find.ts) and reports each hit by block
+ * index, so a hit can be fed straight back into `read_document { range }`.
  */
 export type McpEditorCommand =
-  'insert_content' | 'replace_blocks' | 'apply_ops' | 'read_document' | 'save_document'
+  | 'insert_content'
+  | 'replace_blocks'
+  | 'apply_ops'
+  | 'read_document'
+  | 'save_document'
+  | 'search_document'
 
 export interface McpCommandMessage {
   requestId: string

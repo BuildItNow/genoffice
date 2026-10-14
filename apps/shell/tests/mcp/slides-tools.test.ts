@@ -9,6 +9,7 @@ import { McpServerService } from '../../src/main/mcp/mcp-server'
 import { outlineToOps, parsePptxOutline } from '../../src/main/mcp/pptx-outline'
 import {
   createSlidesTools,
+  scanDeck,
   slidesDriver,
   type SlidesControl,
 } from '../../src/main/mcp/tools/slides-tools'
@@ -268,7 +269,7 @@ describe('headless create_pptx', () => {
 })
 
 /** In-memory SlidesControl standing in for the shell's slides-bridge */
-function fakeSlidesControl(): {
+function fakeSlidesControl(deck?: unknown): {
   control: SlidesControl
   saved: Array<{ path: string }>
   reads: Array<{ wcId: number; opts: unknown }>
@@ -291,7 +292,7 @@ function fakeSlidesControl(): {
       },
       readDeck: async (wcId, opts) => {
         reads.push({ wcId, opts })
-        return { slides: [{ index: 0, wc: wcId, elements: [] }] }
+        return deck ?? { slides: [{ index: 0, wc: wcId, elements: [] }] }
       },
       saveDeck: async (wcId, path) => {
         if (wcId <= 0) throw new Error('no deck')
@@ -368,6 +369,49 @@ describe('visible deck session tools', () => {
     expect(fake.reads.at(-1)).toEqual({ wcId: 1, opts: { slide: 2, full: true, maxChars: 500 } })
   })
 
+  it('search_deck scans a full read of the session deck and addresses each hit', async () => {
+    const deck = {
+      slides: 2,
+      pages: [
+        { index: 0, elements: [{ id: 'el-1', type: 'text', text: 'Quarterly deck' }] },
+        {
+          index: 1,
+          elements: [{ id: 'el-2', type: 'text', text: 'Body copy' }],
+          notes: 'speaker note: quarterly',
+        },
+      ],
+    }
+    const fake = fakeSlidesControl(deck)
+    await startService(sessionSurface(fake.control))
+    await client!.callTool({ name: 'create_session', arguments: { family: 'pptx' } })
+
+    const result = await client!.callTool({
+      name: 'search_deck',
+      arguments: { query: 'quarterly' },
+    })
+    expect(result.isError).toBeFalsy()
+    // a full read feeds the scan (preview clipping would hide hits)
+    expect(fake.reads.at(-1)).toEqual({ wcId: 1, opts: { full: true } })
+    const payload = JSON.parse(text(result.content)) as {
+      total: number
+      matches: Array<{ slide: number; el: string | null; type: string }>
+    }
+    expect(payload.total).toBe(2)
+    expect(payload.matches).toEqual([
+      { slide: 0, el: 'el-1', type: 'text', snippet: 'Quarterly deck' },
+      { slide: 1, el: null, type: 'notes', snippet: 'speaker note: quarterly' },
+    ])
+  })
+
+  it('search_deck refuses an empty query before reading the deck', async () => {
+    const fake = fakeSlidesControl()
+    await startService(sessionSurface(fake.control))
+    await client!.callTool({ name: 'create_session', arguments: { family: 'pptx' } })
+    const result = await client!.callTool({ name: 'search_deck', arguments: { query: '' } })
+    expect(result.isError).toBe(true)
+    expect(fake.reads).toEqual([])
+  })
+
   it('surfaces failed transactions as errors, keeps dry runs successful, caps batch size', async () => {
     const fake = fakeSlidesControl()
     await startService(sessionSurface(fake.control))
@@ -396,8 +440,79 @@ describe('visible deck session tools', () => {
   it('disappear entirely without a control (headless runs keep the file-only surface)', async () => {
     await startService(createSlidesTools(baseDeps(), createSessionHost()))
     const names = (await client!.listTools()).tools.map((t) => t.name)
-    for (const tool of ['create_session', 'read_deck', 'apply_slide_ops', 'save_session']) {
+    for (const tool of [
+      'create_session',
+      'read_deck',
+      'search_deck',
+      'apply_slide_ops',
+      'save_session',
+    ]) {
       expect(names).not.toContain(tool)
     }
+  })
+})
+
+describe('scanDeck', () => {
+  const deck = {
+    slides: 3,
+    pages: [
+      { index: 0, elements: [{ id: 'title', type: 'text', text: 'Quarterly Review' }] },
+      {
+        index: 1,
+        elements: [
+          {
+            id: 'group',
+            type: 'group',
+            children: [
+              { id: 'child-a', type: 'text', text: 'Revenue up' },
+              { id: 'child-b', type: 'text', text: 'Costs down' },
+            ],
+          },
+        ],
+        notes: 'speaker note about revenue',
+      },
+      { index: 2, elements: [{ id: 'last', type: 'text', text: 'Thanks' }] },
+    ],
+  }
+  const opts = { matchCase: false, maxResults: 100, context: 30 }
+
+  it('walks groups and attributes each hit to the leaf element id', () => {
+    const out = scanDeck(deck, { query: 'revenue', ...opts })
+    // a group has no text of its own, so the hit lands on the child id
+    expect(out.matches.filter((m) => m.el === 'child-a')).toHaveLength(1)
+    expect(out.matches.some((m) => m.el === 'group')).toBe(false)
+  })
+
+  it('scans speaker notes as type "notes" with a null element', () => {
+    const out = scanDeck(deck, { query: 'revenue', ...opts })
+    const notes = out.matches.filter((m) => m.type === 'notes')
+    expect(notes).toEqual([
+      { slide: 1, el: null, type: 'notes', snippet: 'speaker note about revenue' },
+    ])
+    expect(out.total).toBe(2)
+    expect(out.slides).toBe(3)
+  })
+
+  it('scopes to one 0-based slide when given', () => {
+    expect(scanDeck(deck, { query: 'quarterly', slide: 0, ...opts }).total).toBe(1)
+    expect(scanDeck(deck, { query: 'quarterly', slide: 2, ...opts }).total).toBe(0)
+  })
+
+  it('honors matchCase', () => {
+    // 'Revenue' is capital R; the lowercase notes hit is the only match
+    const out = scanDeck(deck, { query: 'revenue', matchCase: true, maxResults: 100, context: 30 })
+    expect(out.total).toBe(1)
+    expect(out.matches[0]!.type).toBe('notes')
+  })
+
+  it('caps results and reports truncation', () => {
+    const out = scanDeck(deck, { query: 'revenue', matchCase: false, maxResults: 1, context: 30 })
+    expect(out.total).toBe(1)
+    expect(out.truncated).toBe(true)
+  })
+
+  it('returns an empty scan for an empty query', () => {
+    const out = scanDeck(deck, { query: '', ...opts })
+    expect(out).toEqual({ slides: 3, total: 0, truncated: false, matches: [] })
   })
 })

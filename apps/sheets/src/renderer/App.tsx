@@ -4821,6 +4821,9 @@ export function App({
       )
     },
     readRange: (range, sheetId, opts) => readSheetRange(range, sheetId, opts),
+    // Same find engine the built-in AI's find_cells uses, so MCP search and the
+    // in-app find agree on what matches.
+    findCells: (options) => findWorkbookCells(readContext(), options),
     sheets: () => getActiveSheetInfo().sheets.map((sheet) => ({ id: sheet.id, name: sheet.name })),
     // The user is watching this grid, so an edit to a sheet the view is not
     // showing would otherwise land invisibly. Switch the tab and bring the
@@ -4905,6 +4908,12 @@ export function App({
       context: () => handlers.current?.context(),
       readCells: (addresses, sheetId) => handlers.current?.readCells(addresses, sheetId) ?? {},
       readRange: (range, sheetId, opts) => handlers.current?.readRange(range, sheetId, opts),
+      findCells: (options) =>
+        handlers.current?.findCells(options) ?? {
+          matches: [],
+          truncated: false,
+          incompleteSheets: [],
+        },
       sheets: () => handlers.current?.sheets() ?? [],
       focusSheet: (sheetId, address) => handlers.current?.focusSheet(sheetId, address),
       applyOps: async (ops, dryRun) =>
