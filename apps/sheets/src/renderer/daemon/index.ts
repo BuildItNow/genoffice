@@ -9,6 +9,23 @@ export {
   dispatchDaemonCommand,
   isDaemonCommand,
 } from './commands'
+export {
+  borderStateOf,
+  cellFormatStateOf,
+  DEFAULT_FORMAT_CATEGORIES,
+  FORMAT_CATEGORIES,
+  FORMAT_CATEGORY_KEYS,
+  type FormatCategory,
+  type ReadAlignmentFormat,
+  type ReadBorderEdge,
+  type ReadBorderFormat,
+  type ReadCellBorders,
+  type ReadCellFormat,
+  type ReadFillFormat,
+  type ReadFontFormat,
+  type ReadNumberFormat,
+  type StyledRange,
+} from './format-state'
 export type {
   DaemonCommandName,
   DaemonCommandResult,

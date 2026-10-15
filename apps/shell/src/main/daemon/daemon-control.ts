@@ -144,20 +144,48 @@ async function resolveSheetTab(deps: DaemonControlDeps, args: Record<string, unk
   return { doc, wcId: contents.id }
 }
 
-/** run one sheet command in the target tab's renderer (payload carries no tabId) */
-async function runSheet(
+/**
+ * Run one sheet command in the target tab's renderer (payload carries no tabId),
+ * and report the tab it ran on so a caller can read the tab's own state too.
+ */
+async function runSheetOnTab(
   deps: DaemonControlDeps,
   args: Record<string, unknown>,
   command: string,
-): Promise<Record<string, unknown>> {
-  const { wcId } = await resolveSheetTab(deps, args)
+): Promise<{ doc: OpenDocumentTab; result: Record<string, unknown> }> {
+  const { doc, wcId } = await resolveSheetTab(deps, args)
   const { tabId: _tabId, ...payload } = args
   const result = await deps.sheets.runCommand(
     wcId,
     command as Parameters<SheetsControl['runCommand']>[1],
     payload,
   )
-  return result && typeof result === 'object' ? (result as Record<string, unknown>) : { result }
+  return {
+    doc,
+    result: result && typeof result === 'object' ? (result as Record<string, unknown>) : { result },
+  }
+}
+
+/** run one sheet command in the target tab's renderer (payload carries no tabId) */
+async function runSheet(
+  deps: DaemonControlDeps,
+  args: Record<string, unknown>,
+  command: string,
+): Promise<Record<string, unknown>> {
+  return (await runSheetOnTab(deps, args, command)).result
+}
+
+/**
+ * office_sheet_info stamped with the tab's unsaved-changes flag: `dirty` is true
+ * while the workbook has edits not yet written to disk, the same flag office_list
+ * reports for every tab. The other sheet reads leave it off.
+ */
+async function sheetInfoTool(
+  deps: DaemonControlDeps,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { doc, result } = await runSheetOnTab(deps, args, 'office_sheet_info')
+  return { ...result, dirty: doc.dirty }
 }
 
 /** office_list: the open tabs, each as the row later calls address by tabId */
@@ -257,7 +285,7 @@ async function openTool(
   const doc = resolveOpenDocument(await listTabs(tabs), tabId)
   if (doc?.kind === 'sheets') {
     try {
-      const info = await runSheet(deps, { tabId }, 'office_sheet_info')
+      const info = await sheetInfoTool(deps, { tabId })
       return { path, tabId, info }
     } catch (error) {
       throw new Error(
@@ -394,7 +422,7 @@ export function createDaemonControl(getDeps: () => DaemonControlDeps): OfficeCon
           case 'save':
             return ok(await saveTool(deps, args))
           case 'sheet_info':
-            return ok(await runSheet(deps, args, 'office_sheet_info'))
+            return ok(await sheetInfoTool(deps, args))
           case 'sheet_read':
             return ok(await runSheet(deps, args, 'office_sheet_read'))
           case 'sheet_read_formats':

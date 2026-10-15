@@ -5,7 +5,7 @@ import {
   type WorkbookOperation,
 } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
 import { normalizeSheetRefs, primaryCellOf, primarySheetId, type SheetRef } from './mcp-sheet-refs'
-import { describeOpError, dispatchDaemonCommand } from './daemon'
+import { describeOpError, dispatchDaemonCommand, type FormatCategory } from './daemon'
 import type { RangeFormatsResult, RangeReadResult, SheetMeta } from './daemon/types'
 import type { FindCellsOptions, FindCellsOutcome } from './ai/tools'
 
@@ -47,11 +47,11 @@ export interface McpSheetHandlers {
   ) => RangeReadResult | Promise<RangeReadResult>
   /** find cells across the workbook (the in-app find_cells engine); hits carry {sheetName,address,value,formula?} */
   findCells: (options: FindCellsOptions) => FindCellsOutcome | Promise<FindCellsOutcome>
-  /** explicit per-cell formatting over an A1 area, paged by rows like `readRange` (cells with no set format are omitted) */
+  /** explicit per-cell formatting over an A1 area, paged by rows like `readRange`; `opts.category` (default the common font/fill/alignment/number set, or `['all']` for everything) narrows each cell to the named Format Cells groups, and cells with no set format are omitted */
   readRangeFormats: (
     range: string,
     sheetId: string | undefined,
-    opts: { maxRows?: number },
+    opts: { maxRows?: number; category?: readonly FormatCategory[] },
   ) => RangeFormatsResult | Promise<RangeFormatsResult>
   /** the workbook's worksheets, for resolving name-addressed ops */
   sheets: () => readonly SheetRef[]
