@@ -8,6 +8,7 @@ import {
   type OpCatalog,
   type OpEntry,
 } from '../op-catalog'
+import { didYouMean } from '../suggest'
 import { REFUSED_DSL_OPS } from './xlsx-gateway-ops'
 
 /** Presentation order of the guide; a test asserts every supported op sits in exactly one group. */
@@ -227,4 +228,94 @@ export function sheetGuideText(group?: string): string {
   const lines = [...HEADER, '', ...renderGroups(sheetCatalog(), group)]
   if (!group) lines.push('', ...FOOTER)
   return lines.join('\n')
+}
+
+/** One op's reference as the live app's `office_sheet_edit_help` reports it. */
+export interface SheetOpHelp {
+  op: string
+  group: string
+  signature: string
+  note?: string
+  /** present for ops only the live editor can run (the CLI refuses them headless) */
+  requiresEditorSession?: string
+}
+
+/** A group's ops by name, as `office_sheet_edit_help` lists them (the "清单"). */
+export interface SheetCategoryHelp {
+  name: string
+  summary?: string
+  ops: string[]
+}
+
+export interface SheetHelp {
+  /** present when categories were asked for (via `list`) */
+  categories?: SheetCategoryHelp[]
+  /** present when ops were asked for (via `ops`) */
+  ops?: SheetOpHelp[]
+  /** names that matched nothing; present only when at least one name was unknown */
+  unknown?: {
+    categories: { name: string; suggestion?: string }[]
+    ops: { op: string; suggestion?: string }[]
+  }
+}
+
+/**
+ * The reference the live app's `office_sheet_edit_help` serves: `list` names categories and
+ * returns each one's op names, `ops` names ops and returns each one's signature and note (the
+ * same text `guide sheets <op>` prints). Nothing given returns nothing. An unknown name is
+ * reported on its own with a suggestion rather than failing the whole call.
+ */
+export function sheetHelp(req: { list?: readonly string[]; ops?: readonly string[] }): SheetHelp {
+  const catalog = sheetCatalog()
+  const groups = new Map(catalog.groups.map((g) => [g.name, g]))
+  const byOp = new Map(catalog.ops.map((e) => [e.op, e]))
+  const unknownCategories: { name: string; suggestion?: string }[] = []
+  const unknownOps: { op: string; suggestion?: string }[] = []
+  const out: SheetHelp = {}
+
+  if (req.list) {
+    const categories: SheetCategoryHelp[] = []
+    for (const name of req.list) {
+      const group = groups.get(name)
+      if (!group) {
+        const suggestion = didYouMean(name, groups.keys())
+        unknownCategories.push(suggestion ? { name, suggestion } : { name })
+        continue
+      }
+      categories.push({
+        name: group.name,
+        ...(group.summary ? { summary: group.summary } : {}),
+        ops: group.ops,
+      })
+    }
+    out.categories = categories
+  }
+
+  if (req.ops) {
+    const ops: SheetOpHelp[] = []
+    for (const name of req.ops) {
+      const entry = byOp.get(name)
+      if (!entry) {
+        const suggestion = didYouMean(name, byOp.keys())
+        unknownOps.push(suggestion ? { op: name, suggestion } : { op: name })
+        continue
+      }
+      ops.push({
+        op: entry.op,
+        group: entry.group,
+        signature: entry.signature,
+        ...(entry.note ? { note: entry.note } : {}),
+        ...(entry.available === false && entry.reason
+          ? { requiresEditorSession: entry.reason }
+          : {}),
+      })
+    }
+    out.ops = ops
+  }
+
+  if (unknownCategories.length || unknownOps.length) {
+    out.unknown = { categories: unknownCategories, ops: unknownOps }
+  }
+
+  return out
 }

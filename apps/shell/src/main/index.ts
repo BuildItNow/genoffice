@@ -176,6 +176,7 @@ import { createDocsControl, installDocsBridge } from './mcp/docs-bridge'
 import { createSlidesControl } from './mcp/slides-bridge'
 import { createSheetsControl, installSheetsBridge } from './mcp/sheets-bridge'
 import { createOpenDocumentsControl, createOpenTargetResolver } from './mcp/open-documents-bridge'
+import { createDaemonControl } from './daemon'
 import {
   configureSheetsRuntime,
   exportSheetsPdfHeadless,
@@ -580,20 +581,11 @@ function currentAutoSaveDefault(): AutoSaveDefault {
 }
 
 /** MCP server settings (persisted in userData/app-settings.json; default off). */
-/**
- * The MCP daemon sets GENOFFICE_MCP_FORCE=1 when it launches the app, so the
- * app's built-in server comes up even when the saved setting is off — otherwise
- * the daemon's `office_gui_*` tools would have nothing to proxy to.
- */
-function mcpForcedOn(): boolean {
-  return /^(1|true|yes|on)$/i.test(process.env.GENOFFICE_MCP_FORCE?.trim() ?? '')
-}
-
 function currentMcpSettings(): McpSettings {
   const saved = readAppSettings(APP_SETTINGS_PATH())
   const port = saved.mcpPort
   return {
-    enabled: saved.mcpEnabled === true || mcpForcedOn(),
+    enabled: saved.mcpEnabled === true,
     port:
       typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536
         ? port
@@ -6145,6 +6137,33 @@ app.whenReady().then(async () => {
     authorizeSave: authorizeMcpSheetWrite,
     abandonBlankTab: (wcId) => abandonBlankSheetsTabForMcp(wcId),
   })
+  // the open-documents control serves both the built-in open_documents tool and
+  // the daemon's office_close; build it once so a close behaves identically
+  const mcpOpenDocumentsControl = createOpenDocumentsControl({
+    list: async () => {
+      const tabs = tabManager ? await tabManager.openDocuments() : []
+      return [...tabs, ...(await detachedOpenDocuments())]
+    },
+    webContentsFor: (tabId) =>
+      tabManager?.webContentsForTab(tabId) ?? detachedWebContentsFor(tabId),
+    closeTab: (tabId) =>
+      closeDetachedWithoutPrompt(tabId) || (tabManager?.closeTabWithoutPrompt(tabId) ?? false),
+    defaultSaveDir: () => defaultSaveDir(),
+    docs: mcpDocsControl,
+    sheets: mcpSheetsControl,
+    slides: mcpSlidesControl,
+    slidesDiscard: discardSlidesRecovery,
+    markdown: {
+      read: markdownReadText,
+      save: markdownSaveToPath,
+      discard: markdownDiscardPendingAssets,
+    },
+    html: {
+      read: htmlReadText,
+      save: htmlSaveToPath,
+      discard: htmlDiscardPendingAssets,
+    },
+  })
   configureMcpRuntime({
     version: app.getVersion(),
     defaultSaveDir: () => defaultSaveDir(),
@@ -6161,31 +6180,7 @@ app.whenReady().then(async () => {
     sheetsControl: mcpSheetsControl,
     // documents the user has open: the tab list plus each family's own bridge,
     // so an agent reaches a tab nobody but the user opened
-    openDocumentsControl: createOpenDocumentsControl({
-      list: async () => {
-        const tabs = tabManager ? await tabManager.openDocuments() : []
-        return [...tabs, ...(await detachedOpenDocuments())]
-      },
-      webContentsFor: (tabId) =>
-        tabManager?.webContentsForTab(tabId) ?? detachedWebContentsFor(tabId),
-      closeTab: (tabId) =>
-        closeDetachedWithoutPrompt(tabId) || (tabManager?.closeTabWithoutPrompt(tabId) ?? false),
-      defaultSaveDir: () => defaultSaveDir(),
-      docs: mcpDocsControl,
-      sheets: mcpSheetsControl,
-      slides: mcpSlidesControl,
-      slidesDiscard: discardSlidesRecovery,
-      markdown: {
-        read: markdownReadText,
-        save: markdownSaveToPath,
-        discard: markdownDiscardPendingAssets,
-      },
-      html: {
-        read: htmlReadText,
-        save: htmlSaveToPath,
-        discard: htmlDiscardPendingAssets,
-      },
-    }),
+    openDocumentsControl: mcpOpenDocumentsControl,
     // the headless create_*/read_* tools delegate to the bundled genoffice CLI
     // (the same engines, no second implementation); it runs on the app's own
     // Node runtime via ELECTRON_RUN_AS_NODE
@@ -6254,9 +6249,21 @@ app.whenReady().then(async () => {
         if (!activateDetached(id)) tabManager?.activateTab(id)
       },
       findTab: (path) => tabManager?.findTabByPath(path) ?? findDetachedTabByPath(path),
-      // the mcp probe: an out-of-process daemon asks where the built-in server
-      // is, so its office_gui_* tools can proxy to this app
+      // the mcp probe: an out-of-process client asks where the built-in server
+      // is and what it advertises
       mcp: () => mcpStatus(),
+      // the daemon's own office_* channel: routed straight to a tab's renderer,
+      // never through the built-in MCP server (see daemon/daemon-control.ts)
+      // a getter, not a fixed object: `tabManager` is rebuilt after the last
+      // window closes, so the deps are read fresh on every office_* call
+      daemon: createDaemonControl(() => ({
+        tabManager: tabManager ?? null,
+        sheets: mcpSheetsControl,
+        documents: mcpOpenDocumentsControl,
+        // create/open need a window to put their tab in; macOS keeps the app
+        // alive with none, so rebuild it rather than fail "no window open"
+        revealShellWindow,
+      })).handle,
     }),
   ).then(
     (server) => {

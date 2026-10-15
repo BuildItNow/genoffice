@@ -15,7 +15,7 @@ import { CliError, EXIT } from '../result'
 export const daemonCommand: CommandDef = {
   name: 'daemon',
   summary:
-    'Serve the GenOffice MCP server on stdio through the genoffice command already on the PATH: office_gui_* drives the live app (started on demand) and keeps running across its restarts, and --cli adds the headless office_cli_* family. This is what an MCP client config points at — `command: "genoffice", args: ["daemon"]`.',
+    'Serve the GenOffice MCP server on stdio through the genoffice command already on the PATH: office_* drives the live app (started on demand) and keeps running across its restarts, and --cli adds the headless office_cli_* family. This is what an MCP client config points at — `command: "genoffice", args: ["daemon"]`.',
   usage: 'daemon [--cli] [--compact-schemas]',
   // the MCP transport owns stdout for the whole run; runCli prints nothing after it
   quiet: true,

@@ -72,6 +72,15 @@ describe('control server', () => {
       token: 't',
       request: { cmd: 'open', path: '/x' },
     })
+
+    // the daemon's tool channel carries no path — only a tool name
+    expect(parseEnvelope('{"token":"t","request":{"cmd":"daemon","tool":"list"}}')).toEqual({
+      token: 't',
+      request: { cmd: 'daemon', tool: 'list' },
+    })
+    // a tool name is required
+    expect(parseEnvelope('{"token":"t","request":{"cmd":"daemon"}}')).toBeNull()
+    expect(parseEnvelope('{"token":"t","request":{"cmd":"daemon","tool":7}}')).toBeNull()
   })
 })
 
@@ -156,6 +165,26 @@ describe('control handler', () => {
       path: join(tmpdir(), 'nope.docx'),
     })
     expect(missing).toMatchObject({ ok: false, error: { reason: 'file_not_found' } })
+  })
+
+  it('routes a daemon request to the daemon tool channel, or refuses when absent', async () => {
+    const office = vi.fn().mockResolvedValue({ ok: true, result: { tabs: [] } })
+    expect(await controlHandler(host({ daemon: office }))({ cmd: 'daemon', tool: 'list' })).toEqual({
+      ok: true,
+      result: { tabs: [] },
+    })
+    // no args arrives as an empty object
+    expect(office).toHaveBeenCalledWith('list', {})
+
+    await controlHandler(host({ daemon: office }))({
+      cmd: 'daemon',
+      tool: 'sheet_read',
+      args: { tabId: 't1', range: 'A1:B2' },
+    })
+    expect(office).toHaveBeenLastCalledWith('sheet_read', { tabId: 't1', range: 'A1:B2' })
+
+    const missing = await controlHandler(host({}))({ cmd: 'daemon', tool: 'list' })
+    expect(missing).toMatchObject({ ok: false, error: { reason: 'unsupported' } })
   })
 
   it('passes renderer errors through and gives up when the document never loads', async () => {

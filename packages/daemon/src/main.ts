@@ -2,9 +2,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createDaemonServer } from './server'
 
 /**
- * `office-daemon` entry point. Serves the two tool families over stdio, the
+ * `office-daemon` entry point. Serves the tool families over stdio, the
  * transport MCP clients (Claude Code, Cursor, …) launch and speak to. The
- * daemon starts no window and no app of its own: the office_gui_* tools bring
+ * daemon starts no window and no app of its own: the office_* tools bring
  * GenOffice up only when one is actually called.
  */
 
@@ -13,13 +13,15 @@ const HELP = `office-daemon — GenOffice MCP server that outlives the app
 Usage:
   office-daemon [--cli] [--compact-schemas]
 
-Serves the GenOffice MCP tool surface over stdio. office_gui_* (drive a live
-window; the app is started on demand) is always on. office_cli_* (the headless
-family, tens of tools) is off unless --cli is given; it also takes
-GENOFFICE_MCP_CLI=1. The cloud commands (search, image, media, capabilities) are
-never served. --compact-schemas advertises the CLI tools' inline JSON as plain
-arrays (smaller tools/list; also GENOFFICE_MCP_COMPACT_SCHEMAS=1) and has no
-effect without --cli.
+Serves the GenOffice MCP tool surface over stdio. office_* (the daemon's own
+create/open/list/save, the per-tab sheet tools, the PDF reads, and the
+sheet_edit_help op reference, over the app's control socket; the app is started
+on demand) is always on. office_cli_* (the headless family, tens of
+tools) is off unless --cli is given; it also takes GENOFFICE_MCP_CLI=1. The
+cloud commands (search, image, media, capabilities) are never served.
+--compact-schemas advertises the CLI tools' inline JSON as plain arrays (smaller
+tools/list; also GENOFFICE_MCP_COMPACT_SCHEMAS=1) and has no effect without
+--cli.
 `
 
 function truthy(value: string | undefined): boolean {

@@ -1,16 +1,12 @@
 import { z } from 'zod'
 import type { McpCommandMessage } from '../shared/desktop-api'
 import {
-  describeOperationErrors,
   workbookOperationSchema,
   type WorkbookOperation,
 } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
-import {
-  parseAddress,
-  parseRange,
-  type RangeBounds,
-} from '@genoffice/xlsx-gateway/domain/cell-address'
 import { normalizeSheetRefs, primaryCellOf, primarySheetId, type SheetRef } from './mcp-sheet-refs'
+import { describeOpError, dispatchDaemonCommand } from './daemon'
+import type { RangeFormatsResult, RangeReadResult, SheetMeta } from './daemon/types'
 import type { FindCellsOptions, FindCellsOutcome } from './ai/tools'
 
 /**
@@ -34,31 +30,13 @@ const READY_POLL_MS = 50
 const READY_SLOW_POLL_MS = 1_000
 const READY_FAST_WINDOW_MS = 20_000
 
-/** search_sheet match-count bounds, mirroring the MCP search tool's own */
-const SEARCH_RESULTS_DEFAULT = 100
-const SEARCH_MAX_RESULTS = 500
-
-/** does an A1 address fall inside an inclusive range? (malformed address → false) */
-function addressInBounds(address: string, bounds: RangeBounds): boolean {
-  let coords
-  try {
-    coords = parseAddress(address)
-  } catch {
-    return false
-  }
-  return (
-    coords.row >= bounds.startRow &&
-    coords.row <= bounds.endRow &&
-    coords.column >= bounds.startColumn &&
-    coords.column <= bounds.endColumn
-  )
-}
-
 export interface McpSheetHandlers {
   /** workbook mounted and editable? (drives the ready announce) */
   hasWorkbook: () => boolean
   /** workbook overview: sheets with ids/names/extents, active sheet */
   context: () => unknown
+  /** the descriptor of the sheet an id names (or the active sheet when omitted), or undefined when none is open */
+  readSheetMeta: (sheetId?: string) => SheetMeta | undefined
   /** values + formulas for the requested A1 addresses */
   readCells: (addresses: string[], sheetId?: string) => unknown
   /** read a rectangular A1 range as a value grid + formulas keyed by address, paged by rows (the CLI's `sheet read --range`) */
@@ -66,9 +44,15 @@ export interface McpSheetHandlers {
     range: string,
     sheetId: string | undefined,
     opts: { maxRows?: number },
-  ) => unknown | Promise<unknown>
+  ) => RangeReadResult | Promise<RangeReadResult>
   /** find cells across the workbook (the in-app find_cells engine); hits carry {sheetName,address,value,formula?} */
   findCells: (options: FindCellsOptions) => FindCellsOutcome | Promise<FindCellsOutcome>
+  /** explicit per-cell formatting over an A1 area, paged by rows like `readRange` (cells with no set format are omitted) */
+  readRangeFormats: (
+    range: string,
+    sheetId: string | undefined,
+    opts: { maxRows?: number },
+  ) => RangeFormatsResult | Promise<RangeFormatsResult>
   /** the workbook's worksheets, for resolving name-addressed ops */
   sheets: () => readonly SheetRef[]
   /** apply a workbook DSL batch (planFromOps + applyChangePlan) */
@@ -121,14 +105,6 @@ export function installSheetsMcpBridge(handlers: McpSheetHandlers): () => void {
     off()
   }
 
-  /** First schema issue, with the offending op named so the client can fix it. */
-  function describeOpError(ops: unknown[], error: z.ZodError): string {
-    const text = describeOperationErrors(ops, error)
-    return error.issues.some((issue) => issue.path.includes('sheetId'))
-      ? `${text}\nCall read_sheet first and use a sheetId from its output.`
-      : text
-  }
-
   /**
    * A read's target sheet: the name the caller gave (`sheet`, the CLI's
    * vocabulary) resolved against the open workbook, else the id it passed.
@@ -164,6 +140,16 @@ export function installSheetsMcpBridge(handlers: McpSheetHandlers): () => void {
     }
     try {
       const payload = (message.payload ?? {}) as Record<string, unknown>
+      // The daemon's own `office_sheet_*` family rides this same channel; its
+      // implementations live in daemon/commands.ts so this bridge stays transport.
+      // It returns `undefined` for a name it does not own — that just means the
+      // switch below handles it. A throw is caught by the outer catch and reported
+      // as the command's error.
+      const handled = await dispatchDaemonCommand(message.command, payload, handlers)
+      if (handled !== undefined) {
+        reply(true, handled)
+        return
+      }
       switch (message.command) {
         case 'read_sheet': {
           const addresses = Array.isArray(payload.addresses)
@@ -194,71 +180,6 @@ export function installSheetsMcpBridge(handlers: McpSheetHandlers): () => void {
           } else {
             reply(true, { context: handlers.context() })
           }
-          return
-        }
-        case 'search_sheet': {
-          const query = typeof payload.query === 'string' ? payload.query : ''
-          if (!query.trim()) {
-            reply(false, undefined, 'search_sheet needs a non-empty "query"')
-            return
-          }
-          const resolved = resolveReadSheet(
-            typeof payload.sheet === 'string' ? payload.sheet : undefined,
-            typeof payload.sheetId === 'string' ? payload.sheetId : undefined,
-          )
-          if (!resolved.ok) {
-            reply(false, undefined, resolved.error)
-            return
-          }
-          // A range narrows the hits to one A1 area; the engine scans a sheet
-          // (or the whole workbook), so the area filter is applied afterwards.
-          const range = typeof payload.range === 'string' ? payload.range.trim() : ''
-          let bounds: RangeBounds | undefined
-          if (range) {
-            try {
-              bounds = parseRange(range)
-            } catch (error) {
-              reply(
-                false,
-                undefined,
-                error instanceof Error ? error.message : `invalid range "${range}"`,
-              )
-              return
-            }
-          }
-          const lookInRaw = payload.lookIn
-          const maxRaw = Number(payload.maxResults)
-          const outcome = await handlers.findCells({
-            query,
-            regex: payload.regex === true,
-            lookIn: lookInRaw === 'values' || lookInRaw === 'formulas' ? lookInRaw : 'both',
-            errorsOnly: false,
-            sheetId: resolved.sheetId,
-            maxResults:
-              Number.isFinite(maxRaw) && maxRaw >= 1
-                ? Math.min(Math.trunc(maxRaw), SEARCH_MAX_RESULTS)
-                : SEARCH_RESULTS_DEFAULT,
-          })
-          if (outcome.error) {
-            reply(false, undefined, outcome.error)
-            return
-          }
-          const kept = bounds
-            ? outcome.matches.filter((match) => addressInBounds(match.address, bounds))
-            : outcome.matches
-          reply(true, {
-            total: kept.length,
-            matches: kept.map((match) => ({
-              sheet: match.sheetName,
-              address: match.address,
-              value: match.value,
-              ...(match.formula === undefined ? {} : { formula: match.formula }),
-            })),
-            truncated: outcome.truncated,
-            ...(outcome.incompleteSheets.length
-              ? { incompleteSheets: outcome.incompleteSheets }
-              : {}),
-          })
           return
         }
         case 'apply_ops': {

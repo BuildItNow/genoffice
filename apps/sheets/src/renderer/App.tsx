@@ -53,6 +53,7 @@ import {
 } from './univer-state'
 import { applyChangePlan, planFromOps, type OpExecutorContext } from './op-executor'
 import { installSheetsMcpBridge, type McpSheetHandlers } from './mcp-bridge'
+import type { RangeFormatsResult, RangeReadResult, SheetMeta } from './daemon/types'
 import { renameChartRefsForSheet } from './workbook-ops'
 import {
   proposeOperations as proposeOperationsImpl,
@@ -177,7 +178,11 @@ import {
   toggleOutlineGroup,
 } from './outline-actions'
 import { moveOutlineEntries, shiftOutlineEntries } from './outline-model'
-import type { ApplyOutcome, ChangePlan } from '@genoffice/xlsx-gateway/domain/workbook.types'
+import type {
+  ApplyOutcome,
+  CellFormatState,
+  ChangePlan,
+} from '@genoffice/xlsx-gateway/domain/workbook.types'
 import { createElectronTransport } from './ai/transport'
 import {
   MAX_READ_RANGE_CELLS,
@@ -470,7 +475,12 @@ import { shiftPinnedCells } from './formula-closure'
 import { getLang, t, aiLangDirective } from './i18n/locale'
 import { planStillMatches } from './lazy-plan'
 import { lastSurvivingScreenLine, netAxisDelta, screenToFile } from './view-transform'
-import { selectionFormatEquals, toSelectionFormat, type SelectionFormat } from './selection-format'
+import {
+  formatStateOf,
+  selectionFormatEquals,
+  toSelectionFormat,
+  type SelectionFormat,
+} from './selection-format'
 import { ExcelShell, type SelectedShapeRibbon } from './ExcelShell'
 import { RecoveryDialog } from './RecoveryDialog'
 import { ToastHost } from './toast'
@@ -1686,17 +1696,58 @@ export function App({
   }
 
   /**
-   * MCP `read_sheet` range read — the CLI's `sheet read --range` over the live
-   * grid. The A1 range is the location vocabulary; the result is a value grid
-   * plus formulas keyed by address, and a range taller than one call can load is
-   * paged by rows with a "continue with range:<next>" note, so paging through the
-   * pages reads the whole area (the same continuation shape the CLI prints).
+   * The descriptor of one worksheet — id, name, data extent and frozen panes —
+   * assembled here where the live worksheet is reachable, and handed to the
+   * daemon commands as plain data (no live Univer object crosses the boundary).
+   * No id ⇒ the sheet the view is on.
    */
-  async function readSheetRange(
+  function readSheetMeta(sheetId?: string): SheetMeta | undefined {
+    const workbook = univerRef.current?.univerAPI.getActiveWorkbook()
+    if (!workbook) return undefined
+    const sheet =
+      (sheetId === undefined ? workbook.getActiveSheet() : workbook.getSheetBySheetId(sheetId)) ?? undefined
+    if (!sheet) return undefined
+    const id = sheet.getSheetId()
+    const extent = getActiveSheetInfo().sheets.find((candidate) => candidate.id === id)
+    // the full getFreeze() state (all-zero when the sheet has no frozen panes)
+    let freeze = { xSplit: 0, ySplit: 0, startRow: 0, startColumn: 0 }
+    try {
+      freeze = sheet.getFreeze()
+    } catch {
+      // freeze state unavailable on this sheet
+    }
+    return {
+      id,
+      name: sheet.getSheetName(),
+      rows: extent?.rows ?? 0,
+      columns: extent?.columns ?? 0,
+      freeze,
+    }
+  }
+
+  /**
+   * The page of rows one area read covers. An A1 range taller than a single call
+   * can carry (`MAX_READ_RANGE_CELLS`, or a caller's `maxRows`) is cut to
+   * `rowsShown` rows, and the lazy grid is streamed to cover them first (an
+   * unloaded block reads as blank). Shared by the value read and the format read
+   * so both page identically and name the same range to continue from.
+   */
+  async function planRangeRead(
     rangeSpec: string,
     sheetId: string | undefined,
-    opts: { maxRows?: number },
-  ): Promise<unknown> {
+    maxRows: number | undefined,
+  ): Promise<{
+    worksheet: ReturnType<ActiveWorkbook['getActiveSheet']> | null | undefined
+    bounds: RangeBounds
+    width: number
+    height: number
+    rowsShown: number
+    addresses: string[]
+    sheetName: string | undefined
+    shownRange: string
+    truncated: boolean
+    nextRange: string
+  }> {
     let bounds: RangeBounds
     try {
       bounds = parseRange(rangeSpec.trim().toUpperCase())
@@ -1708,8 +1759,8 @@ export function App({
     // one call never loads more than the grid's read cap; a taller range pages by
     // rows instead of being refused
     const rowsFit = Math.max(1, Math.floor(MAX_READ_RANGE_CELLS / width))
-    const rowsShown = Math.min(height, opts.maxRows ?? height, rowsFit)
-    // stream the requested rows into the grid first — an unloaded lazy block reads as null
+    const rowsShown = Math.min(height, maxRows ?? height, rowsFit)
+    // stream the requested rows into the grid first — an unloaded lazy block reads as blank
     const runtime = univerRef.current
     const state = lazyWorkbookRef.current
     const workbook = runtime?.univerAPI.getActiveWorkbook()
@@ -1736,7 +1787,65 @@ export function App({
       for (let c = bounds.startColumn; c <= bounds.endColumn; c++)
         addresses.push(formatAddress(r, c))
     }
-    const cells = readCellsImpl(readContext(), addresses, sheetId)
+    const info = getActiveSheetInfo()
+    const target = info.sheets.find((sheet) => sheet.id === (sheetId ?? info.sheetId))
+    const lastRow = bounds.startRow + rowsShown - 1
+    return {
+      worksheet,
+      bounds,
+      width,
+      height,
+      rowsShown,
+      addresses,
+      sheetName: target?.name,
+      shownRange: `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:${columnLabel(bounds.endColumn)}${lastRow + 1}`,
+      truncated: rowsShown < height,
+      nextRange: `${columnLabel(bounds.startColumn)}${lastRow + 2}:${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`,
+    }
+  }
+
+  /** the "continue from here" note both paged reads append when a range is cut */
+  function rangeContinuationNote(rowsShown: number, rowsTotal: number, nextRange: string): string {
+    return `${rowsShown} of ${rowsTotal} rows shown; continue with range:"${nextRange}"`
+  }
+
+  /**
+   * The merged areas overlapping an inclusive cell box, as A1 strings — a merge
+   * that merely touches the box edge still counts as intersecting. Shared by the
+   * two paged range reads so they report the same merges.
+   */
+  function mergedRangesIn(
+    worksheet: ReturnType<ActiveWorkbook['getActiveSheet']> | null | undefined,
+    bounds: RangeBounds,
+  ): string[] {
+    return (worksheet?.getMergedRanges() ?? [])
+      .filter((merge) => {
+        const box = merge.getRange()
+        return (
+          box.startRow <= bounds.endRow &&
+          box.endRow >= bounds.startRow &&
+          box.startColumn <= bounds.endColumn &&
+          box.endColumn >= bounds.startColumn
+        )
+      })
+      .map((merge) => merge.getA1Notation())
+  }
+
+  /**
+   * MCP `read_sheet` range read — the CLI's `sheet read --range` over the live
+   * grid. The A1 range is the location vocabulary; the result is a value grid
+   * plus formulas keyed by address, and a range taller than one call can load is
+   * paged by rows with a "continue with range:<next>" note, so paging through the
+   * pages reads the whole area (the same continuation shape the CLI prints).
+   */
+  async function readSheetRange(
+    rangeSpec: string,
+    sheetId: string | undefined,
+    opts: { maxRows?: number },
+  ): Promise<RangeReadResult> {
+    const page = await planRangeRead(rangeSpec, sheetId, opts.maxRows)
+    const { bounds, width, height, rowsShown } = page
+    const cells = readCellsImpl(readContext(), page.addresses, sheetId)
     const rows: unknown[][] = []
     const formulas: Record<string, string> = {}
     for (let r = 0; r < rowsShown; r++) {
@@ -1752,22 +1861,64 @@ export function App({
       }
       rows.push(row)
     }
-    const info = getActiveSheetInfo()
-    const target = info.sheets.find((sheet) => sheet.id === (sheetId ?? info.sheetId))
-    const lastRow = bounds.startRow + rowsShown - 1
-    const shownRange = `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:${columnLabel(bounds.endColumn)}${lastRow + 1}`
-    const truncated = rowsShown < height
-    const nextRange = `${columnLabel(bounds.startColumn)}${lastRow + 2}:${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`
     return {
-      sheet: target?.name,
-      range: shownRange,
+      ...(page.sheetName === undefined ? {} : { sheet: page.sheetName }),
+      range: page.shownRange,
       rows,
       formulas,
+      merges: mergedRangesIn(page.worksheet, bounds),
       rowsShown,
       rowsTotal: height,
-      truncated,
-      ...(truncated
-        ? { note: `${rowsShown} of ${height} rows shown; continue with range:"${nextRange}"` }
+      truncated: page.truncated,
+      ...(page.truncated
+        ? { note: rangeContinuationNote(rowsShown, height, page.nextRange) }
+        : {}),
+    }
+  }
+
+  /**
+   * MCP/daemon `office_sheet_read_formats` — the explicit per-cell formatting
+   * over an A1 area, read and paged exactly like `readSheetRange` (the same grid,
+   * cut and continuation note) so the two reads differ only in what each cell
+   * carries: a format state here, a value there (formulas have no counterpart).
+   * A cell with no explicit format reads as `null`, mirroring an empty value.
+   */
+  async function readSheetRangeFormats(
+    rangeSpec: string,
+    sheetId: string | undefined,
+    opts: { maxRows?: number },
+  ): Promise<RangeFormatsResult> {
+    const page = await planRangeRead(rangeSpec, sheetId, opts.maxRows)
+    const { worksheet, bounds, width, height, rowsShown } = page
+    const rows: (CellFormatState | null)[][] = []
+    for (let r = 0; r < rowsShown; r++) {
+      const row: (CellFormatState | null)[] = []
+      for (let c = 0; c < width; c++) {
+        const address = formatAddress(bounds.startRow + r, bounds.startColumn + c)
+        const cell = worksheet?.getRange(address)
+        let pattern = ''
+        try {
+          pattern = cell?.getNumberFormat() ?? ''
+        } catch {
+          // number-format resolution can fail on never-touched cells; treat as General
+        }
+        const format = cell
+          ? formatStateOf(toSelectionFormat(cell.getCellStyleData() ?? {}, pattern))
+          : undefined
+        row.push(format && Object.keys(format).length > 0 ? format : null)
+      }
+      rows.push(row)
+    }
+    return {
+      ...(page.sheetName === undefined ? {} : { sheet: page.sheetName }),
+      range: page.shownRange,
+      rows,
+      merges: mergedRangesIn(worksheet, bounds),
+      rowsShown,
+      rowsTotal: height,
+      truncated: page.truncated,
+      ...(page.truncated
+        ? { note: rangeContinuationNote(rowsShown, height, page.nextRange) }
         : {}),
     }
   }
@@ -4788,6 +4939,7 @@ export function App({
     hasWorkbook: () =>
       univerRef.current?.univerAPI.getActiveWorkbook() != null && lazyWorkbookRef.current != null,
     context: () => getActiveSheetInfo(),
+    readSheetMeta,
     // The MCP read is machine-facing: `value` is the model value, not the
     // rendered text a number format or a narrow column produced. The rendered
     // text rides along as `display` when the two differ, so a caller can still
@@ -4812,6 +4964,9 @@ export function App({
     // Same find engine the built-in AI's find_cells uses, so MCP search and the
     // in-app find agree on what matches.
     findCells: (options) => findWorkbookCells(readContext(), options),
+    // the daemon's office_sheet_read_formats reads explicit per-cell formatting,
+    // paged like the range read
+    readRangeFormats: (range, sheetId, opts) => readSheetRangeFormats(range, sheetId, opts),
     sheets: () => getActiveSheetInfo().sheets.map((sheet) => ({ id: sheet.id, name: sheet.name })),
     // The user is watching this grid, so an edit to a sheet the view is not
     // showing would otherwise land invisibly. Switch the tab and bring the
@@ -4894,14 +5049,24 @@ export function App({
     return installSheetsMcpBridge({
       hasWorkbook: () => handlers.current?.hasWorkbook() ?? false,
       context: () => handlers.current?.context(),
+      readSheetMeta: (sheetId) => handlers.current?.readSheetMeta(sheetId),
       readCells: (addresses, sheetId) => handlers.current?.readCells(addresses, sheetId) ?? {},
-      readRange: (range, sheetId, opts) => handlers.current?.readRange(range, sheetId, opts),
+      readRange: (range, sheetId, opts) => {
+        const current = handlers.current
+        if (!current) throw new Error('the workbook is not ready')
+        return current.readRange(range, sheetId, opts)
+      },
       findCells: (options) =>
         handlers.current?.findCells(options) ?? {
           matches: [],
           truncated: false,
           incompleteSheets: [],
         },
+      readRangeFormats: (range, sheetId, opts) => {
+        const current = handlers.current
+        if (!current) throw new Error('the workbook is not ready')
+        return current.readRangeFormats(range, sheetId, opts)
+      },
       sheets: () => handlers.current?.sheets() ?? [],
       focusSheet: (sheetId, address) => handlers.current?.focusSheet(sheetId, address),
       applyOps: async (ops, dryRun) =>

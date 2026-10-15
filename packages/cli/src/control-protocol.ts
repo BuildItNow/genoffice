@@ -11,6 +11,16 @@ export const CONTROL_FILE = 'control.json'
 export const CONTROL_PROTOCOL = 1
 export const CONTROL_MAX_REQUEST_BYTES = 64 * 1024
 
+/**
+ * The control command carrying the daemon's own `office_*` tool calls. It is
+ * named `daemon` (not `office`) to keep the command distinct from the `office_*`
+ * tool prefix it transports; `tool` names one such tool and `args` its
+ * arguments. The shell routes it to the owning tab's renderer
+ * (see `daemon/daemon-control.ts`), so a daemon never registers a tool on the
+ * app's built-in MCP server.
+ */
+export const DAEMON_CMD = 'daemon'
+
 export interface ControlEndpoint {
   protocol: number
   pid: number
@@ -34,6 +44,11 @@ export type ControlRequest =
    * daemon can reach it. Read-only: answers `{ enabled, running, port }`.
    */
   | { cmd: 'mcp' }
+  /**
+   * The daemon's own channel into the app, independent of the built-in MCP
+   * server: `tool` names one `office_*` tool and `args` its arguments.
+   */
+  | { cmd: typeof DAEMON_CMD; tool: string; args?: Record<string, unknown> }
 
 export interface ControlEnvelope {
   token: string

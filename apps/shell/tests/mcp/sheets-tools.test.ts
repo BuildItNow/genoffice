@@ -235,13 +235,6 @@ function fakeSheetsControl(): {
             ? { cells: { A1: { value: 'hello', rawValue: 'hello' } } }
             : { context: { sheetId: 's1', wc: wcId, sheets: [] } }
         }
-        if (command === 'search_sheet') {
-          return {
-            total: 1,
-            matches: [{ sheet: 'Data', address: 'A1', value: 'sum' }],
-            truncated: false,
-          }
-        }
         if (p.ops?.some((o) => (o as { op: string }).op === 'explode')) {
           return { ok: false, reason: 'boom' }
         }
@@ -356,55 +349,12 @@ describe('visible grid session tools', () => {
     expect(text(both.content)).toMatch(/not both/)
   })
 
-  it('routes search_sheet with its scope and match options to the session tab', async () => {
-    const fake = fakeSheetsControl()
-    await startService(sessionSurface(fake.control))
-    await client!.callTool({ name: 'create_session', arguments: { family: 'xlsx' } })
-
-    const result = await client!.callTool({
-      name: 'search_sheet',
-      arguments: {
-        query: 'sum',
-        range: 'A1:D20',
-        sheet: 'Data',
-        regex: true,
-        lookIn: 'formulas',
-        maxResults: 5,
-      },
-    })
-    expect(result.isError).toBeFalsy()
-    expect(fake.calls.at(-1)).toEqual({
-      wcId: 1,
-      command: 'search_sheet',
-      payload: {
-        query: 'sum',
-        range: 'A1:D20',
-        sheet: 'Data',
-        regex: true,
-        lookIn: 'formulas',
-        maxResults: 5,
-      },
-    })
-    const payload = JSON.parse(text(result.content)) as { matches: Array<{ address: string }> }
-    expect(payload.matches[0]!.address).toBe('A1')
-  })
-
-  it('refuses an empty search query before reaching the grid', async () => {
-    const fake = fakeSheetsControl()
-    await startService(sessionSurface(fake.control))
-    await client!.callTool({ name: 'create_session', arguments: { family: 'xlsx' } })
-    const result = await client!.callTool({ name: 'search_sheet', arguments: { query: '' } })
-    expect(result.isError).toBe(true)
-    expect(fake.calls.some((c) => c.command === 'search_sheet')).toBe(false)
-  })
-
   it('disappear entirely without a control (headless runs keep the file-only surface)', async () => {
     await startService(createSheetsTools(baseDeps(), createSessionHost()))
     const names = (await client!.listTools()).tools.map((t) => t.name)
     for (const tool of [
       'create_session',
       'read_sheet',
-      'search_sheet',
       'apply_sheet_ops',
       'save_session',
     ]) {

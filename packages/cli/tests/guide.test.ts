@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { OP_DOCS } from '@genoffice/pptx-ops/op-docs'
 import { fingerprint, signatureFromSchema } from '../src/op-catalog'
-import { SHEET_OP_GROUPS, sheetCatalog } from '../src/formats/xlsx-catalog'
+import { SHEET_OP_GROUPS, sheetCatalog, sheetHelp } from '../src/formats/xlsx-catalog'
 import { SUPPORTED_DSL_OPS } from '../src/formats/xlsx-dsl'
 import { REFUSED_DSL_OPS } from '../src/formats/xlsx-gateway-ops'
 import { run } from './helpers'
@@ -74,6 +74,48 @@ describe('op catalogs', () => {
       error: 'invalid_argument',
       suggestion: 'did you mean set_cell?',
     })
+  })
+
+  it('serves the same op reference the live app exposes (sheetHelp)', () => {
+    const known = sheetHelp({ ops: ['format_range', 'set_cell'] })
+    expect(known.unknown).toBeUndefined()
+    expect(known.ops!.map((e) => e.op)).toEqual(['format_range', 'set_cell'])
+    const catalog = sheetCatalog()
+    for (const entry of known.ops!) {
+      const source = catalog.ops.find((e) => e.op === entry.op)!
+      // the same signature, group and note `guide sheets <op>` prints
+      expect(entry.signature).toBe(source.signature)
+      expect(entry.group).toBe(source.group)
+      expect(entry.note).toBe(source.note)
+    }
+    expect(known.ops![0]!.note).toContain('null clears a property')
+    // only ops were asked for: no category index
+    expect(known.categories).toBeUndefined()
+    // an unknown name is reported on its own, with a suggestion, not thrown
+    const typo = sheetHelp({ ops: ['set_cel'] })
+    expect(typo.ops).toEqual([])
+    expect(typo.unknown.ops).toEqual([{ op: 'set_cel', suggestion: 'set_cell' }])
+    // an op the CLI refuses headless comes back as an editor-session caveat
+    const editor = sheetHelp({ ops: ['add_table_row'] })
+    expect(editor.ops![0]!.requiresEditorSession).toBe(REFUSED_DSL_OPS['add_table_row'])
+  })
+
+  it('lists a category\'s op names, and nothing when nothing is asked for', () => {
+    const one = sheetHelp({ list: ['format'] })
+    expect(one.categories).toEqual([
+      {
+        name: 'format',
+        summary: 'cell formats, conditional formats, data validation',
+        ops: SHEET_OP_GROUPS['format'],
+      },
+    ])
+    expect(one.ops).toBeUndefined()
+    // no arguments ⇒ an empty result
+    expect(sheetHelp({})).toEqual({})
+    // an unknown category is reported on its own, with a suggestion
+    const typo = sheetHelp({ list: ['formt'] })
+    expect(typo.categories).toEqual([])
+    expect(typo.unknown?.categories).toEqual([{ name: 'formt', suggestion: 'format' }])
   })
 
   it('exposes the slides ops as a catalog and prints a single op', async () => {

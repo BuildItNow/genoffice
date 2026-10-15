@@ -52,7 +52,6 @@ const DEFAULT_NAMES = [
   'search_deck',
   'search_document',
   'search_pdf',
-  'search_sheet',
 ].sort()
 
 const BACKGROUND_NAMES = [...DEFAULT_NAMES, 'create_docx', 'create_pptx', 'create_xlsx'].sort()
@@ -154,13 +153,6 @@ function sheetsControl(): { control: SheetsControl; saved: string[] } {
           return p.addresses?.length
             ? { cells: { A1: { value: 'hello', rawValue: 'hello' } } }
             : { context: { sheetId: 's1', wc: wcId, sheets: [] } }
-        }
-        if (command === 'search_sheet') {
-          return {
-            total: 1,
-            matches: [{ sheet: 's1', address: 'A1', value: 'Quarterly' }],
-            truncated: false,
-          }
         }
         if (p.ops?.some((o) => o.op === 'explode')) return { ok: false, reason: 'boom' }
         return { ok: true, applied: p.ops?.length ?? 0 }
@@ -402,10 +394,6 @@ describe('MCP surface over Streamable HTTP (/mcp)', () => {
       const cells = await call(client, 'read_sheet', { addresses: ['A1'] })
       expect(cells.isError).toBe(false)
       expect(cells.text).toContain('hello')
-      const sheetSearch = await call(client, 'search_sheet', { query: 'Quarterly' })
-      expect(sheetSearch.isError).toBe(false)
-      const sheetHits = sheetSearch.json as { matches: Array<{ address: string }> }
-      expect(sheetHits.matches[0]!.address).toBe('A1')
       const sheetOps = await call(client, 'apply_sheet_ops', {
         ops: [{ op: 'set_cell', sheetId: 's1', address: 'A1', value: 'x' }],
       })

@@ -1,9 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { createContext, disposeContext, registerCliTools } from '@genoffice/cli/mcp-server'
-import { GUI_TOOLS } from './gui-tools'
+import { registerOfficeTools } from './office/register'
 import { CLI_PREFIX } from './names'
-import { AppUnavailableError, AppUpstream } from './upstream'
+import { AppUpstream } from './upstream'
 import { DAEMON_VERSION } from './version'
 
 /**
@@ -11,9 +10,9 @@ import { DAEMON_VERSION } from './version'
  *
  * - `office_cli_*` — the bundled genoffice CLI's headless tools, served right
  *   here. They never need the app, so they keep working after the window closes.
- * - `office_gui_*` — the tools that drive a live GenOffice window. Each is a
- *   proxy to the app's own built-in MCP server, which the daemon starts on
- *   demand (see upstream.ts).
+ * - `office_*` — the daemon's own live-window family (create/list/save, the
+ *   sheet tools and the PDF reads). It reaches the app over the control socket,
+ *   so the app's built-in MCP server and its tool list are never involved.
  */
 
 export interface DaemonServerOptions {
@@ -53,7 +52,7 @@ function instructions(cli: boolean): string {
     )
   }
   lines.push(
-    `office_gui_* drive a live GenOffice window: the visible editing sessions (create_session / save_session plus the family content tools), the documents the user has open (office_gui_opened_documents), and opening a file in a tab (office_gui_open). The daemon starts GenOffice on the first such call if it is not already running, and hands the call to the app's own MCP server.`,
+    `office_* are the daemon's own tools for a live window: office_list (the open tabs), office_create / office_open / office_close / office_save, the per-tab sheet tools (office_sheet_info / office_sheet_read / office_sheet_read_formats / office_sheet_search / office_sheet_edit), and the PDF reads (office_pdf_read / office_pdf_search, addressed by an open tab or an absolute .pdf path). office_sheet_edit_help returns the op reference for office_sheet_edit and needs no app. They reach the app directly over its local control socket, so they never touch the app's built-in MCP server.`,
   )
   return [
     'GenOffice MCP daemon: the GenOffice tools behind one server, so editing survives closing the app.',
@@ -78,63 +77,11 @@ export async function createDaemonServer(opts: DaemonServerOptions): Promise<Dae
       omit: CLOUD_TOOLS,
     })
   }
-  registerGuiTools(server, upstream)
+  registerOfficeTools(server, upstream)
 
   return {
     server,
     upstream,
-    dispose: () => {
-      upstream.dispose()
-      disposeContext(ctx)
-    },
+    dispose: () => disposeContext(ctx),
   }
-}
-
-function registerGuiTools(server: McpServer, upstream: AppUpstream): void {
-  for (const tool of GUI_TOOLS) {
-    server.registerTool(
-      tool.name,
-      {
-        description: tool.description,
-        inputSchema: tool.shape,
-        annotations: { readOnlyHint: tool.readOnly === true, openWorldHint: false },
-      },
-      async (args): Promise<CallToolResult> => {
-        try {
-          const call = args as Record<string, unknown>
-          // most tools forward their arguments verbatim; read_pdf resolves the
-          // `document` it exposes into the file path its upstream takes
-          const forwarded = tool.adapt ? await tool.adapt(call, upstream) : call
-          const result = await upstream.call(tool.upstream, forwarded)
-          return relayResult(result)
-        } catch (error) {
-          return errorResult(error, tool.name)
-        }
-      },
-    )
-  }
-}
-
-/**
- * Relay the app's result to our client: the text content and isError, exactly
- * like the CLI family. Additionally forward `structuredContent` when the app
- * sent one — the daemon declares no `outputSchema`, so the SDK passes it through
- * untouched. (The app serialises its payloads as JSON text and sends none today;
- * this keeps the field if that ever changes.)
- */
-export function relayResult(result: CallToolResult): CallToolResult {
-  const relayed: CallToolResult = { content: result.content }
-  if (result.structuredContent !== undefined) relayed.structuredContent = result.structuredContent
-  if (result.isError) relayed.isError = true
-  return relayed
-}
-
-function errorResult(error: unknown, toolName: string): CallToolResult {
-  const message =
-    error instanceof AppUnavailableError
-      ? `${error.message} — this is needed by ${toolName}`
-      : error instanceof Error
-        ? error.message
-        : String(error)
-  return { content: [{ type: 'text', text: message }], isError: true }
 }

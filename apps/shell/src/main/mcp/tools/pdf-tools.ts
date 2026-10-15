@@ -132,6 +132,68 @@ export async function searchPdfFile(
   return { pageCount: doc.pageCount, matches, truncated }
 }
 
+/**
+ * Read one PDF's text: a bounded preview by default, or the named pages in full.
+ * Shared by the built-in `read_pdf` (its `path`) and the daemon's `office_pdf_read`
+ * (a resolved path), so both read a PDF the same way.
+ */
+export async function readPdfFile(
+  bytes: Uint8Array,
+  options: { path: string; pages?: string },
+): Promise<Record<string, unknown>> {
+  const filePath = options.path
+  // A zero-budget probe opens the document (surfacing an encrypted or corrupt
+  // file as a clean error) and reports the page count and metadata. The page
+  // span cannot be resolved before the count is known.
+  const probe = await readPdfText(bytes, { charBudget: 0 }).catch(() => {
+    throw new Error('could not open the PDF — it may be encrypted or corrupt')
+  })
+
+  const spec = typeof options.pages === 'string' ? options.pages.trim() : ''
+  // No page selection: a bounded preview — page count, metadata and the opening
+  // pages' text (each clipped) so the agent learns what the document is, then
+  // asks for the pages whose text it wants in full.
+  if (!spec) {
+    const preview = await readPdfText(bytes, {
+      toPage: PREVIEW_PAGES,
+      charBudget: MAX_TOTAL_CHARS,
+    })
+    const last = preview.pages.at(-1)?.page
+    const next = last === undefined ? undefined : nextPagesAfter(last, preview.pageCount)
+    return {
+      path: filePath,
+      name: basename(filePath),
+      pageCount: preview.pageCount,
+      info: preview.info,
+      pages: preview.pages.map((p) => ({
+        ...p,
+        text: clipText(p.text, PREVIEW_CHARS_PER_PAGE).text,
+      })),
+      ...(next ? { nextPages: next } : {}),
+    }
+  }
+
+  // Only the requested pages are extracted, so pages the caller never asked for
+  // neither spend the budget nor count as truncation. Out-of-range pages were
+  // already dropped by parsePageList, and a request wider than a single window is
+  // read up to MAX_PAGES_PER_READ pages with the rest named by `nextPages`.
+  const wanted = parsePageList(spec, probe.pageCount)
+  const window = wanted.slice(0, MAX_PAGES_PER_READ)
+  const doc = await readPdfText(bytes, { pages: window, charBudget: MAX_TOTAL_CHARS })
+  const last = doc.pages.at(-1)?.page
+  const more = window.length < wanted.length || doc.truncated
+  const next = last === undefined ? undefined : nextPagesAfter(last, doc.pageCount)
+  return {
+    path: filePath,
+    name: basename(filePath),
+    pageCount: doc.pageCount,
+    info: doc.info,
+    pages: doc.pages,
+    truncated: more,
+    ...(more && next ? { nextPages: next } : {}),
+  }
+}
+
 export function createPdfTools(): McpToolDefinition[] {
   return [
     {
@@ -162,57 +224,10 @@ export function createPdfTools(): McpToolDefinition[] {
         if (!existsSync(filePath)) throw new Error(`file not found: ${filePath}`)
 
         const bytes = new Uint8Array(await readFile(filePath))
-        // A zero-budget probe opens the document (surfacing an encrypted or
-        // corrupt file as a clean tool error) and reports the page count and
-        // metadata. The page span cannot be resolved before the count is known.
-        const probe = await readPdfText(bytes, { charBudget: 0 }).catch(() => {
-          throw new Error('could not open the PDF — it may be encrypted or corrupt')
-        })
-
-        const spec = typeof args.pages === 'string' ? args.pages.trim() : ''
-        // No page selection: a bounded preview — page count, metadata and the
-        // opening pages' text (each clipped) so the agent learns what the
-        // document is, then asks for the pages whose text it wants in full.
-        if (!spec) {
-          const preview = await readPdfText(bytes, {
-            toPage: PREVIEW_PAGES,
-            charBudget: MAX_TOTAL_CHARS,
-          })
-          const last = preview.pages.at(-1)?.page
-          const next = last === undefined ? undefined : nextPagesAfter(last, preview.pageCount)
-          return {
-            path: filePath,
-            name: basename(filePath),
-            pageCount: preview.pageCount,
-            info: preview.info,
-            pages: preview.pages.map((p) => ({
-              ...p,
-              text: clipText(p.text, PREVIEW_CHARS_PER_PAGE).text,
-            })),
-            ...(next ? { nextPages: next } : {}),
-          }
-        }
-
-        // Only the requested pages are extracted, so pages the caller never
-        // asked for neither spend the budget nor count as truncation. Out-of-range
-        // pages were already dropped by parsePageList, and a request wider than a
-        // single window is read up to MAX_PAGES_PER_READ pages with the rest named
-        // by `nextPages`.
-        const wanted = parsePageList(spec, probe.pageCount)
-        const window = wanted.slice(0, MAX_PAGES_PER_READ)
-        const doc = await readPdfText(bytes, { pages: window, charBudget: MAX_TOTAL_CHARS })
-        const last = doc.pages.at(-1)?.page
-        const more = window.length < wanted.length || doc.truncated
-        const next = last === undefined ? undefined : nextPagesAfter(last, doc.pageCount)
-        return {
+        return readPdfFile(bytes, {
           path: filePath,
-          name: basename(filePath),
-          pageCount: doc.pageCount,
-          info: doc.info,
-          pages: doc.pages,
-          truncated: more,
-          ...(more && next ? { nextPages: next } : {}),
-        }
+          pages: typeof args.pages === 'string' ? args.pages : undefined,
+        })
       },
     },
     {

@@ -7,11 +7,31 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { installSheetsMcpBridge, type McpSheetHandlers } from '../src/renderer/mcp-bridge'
 import { normalizeSheetRefs, primaryCellOf, primarySheetId } from '../src/renderer/mcp-sheet-refs'
+import type { RangeFormatsResult, RangeReadResult } from '../src/renderer/daemon/types'
 
 const SHEETS = [
   { id: 'sheet-1', name: 'Summary' },
   { id: 'jg_nIT-Asw-tL3tvR3f4q', name: 'Data 2024' },
 ]
+
+/** a minimal range-read result; override the fields a test cares about */
+function rangePage(overrides: Partial<RangeReadResult> = {}): RangeReadResult {
+  return {
+    range: 'A1:B2',
+    rows: [],
+    formulas: {},
+    merges: [],
+    rowsShown: 0,
+    rowsTotal: 0,
+    truncated: false,
+    ...overrides,
+  }
+}
+
+/** a minimal format-read result; override the fields a test cares about */
+function formatsPage(overrides: Partial<RangeFormatsResult> = {}): RangeFormatsResult {
+  return { range: 'A1:B2', rows: [], merges: [], rowsShown: 0, rowsTotal: 0, truncated: false, ...overrides }
+}
 
 describe('normalizeSheetRefs', () => {
   it('turns a name into the id the DSL expects', () => {
@@ -222,9 +242,11 @@ describe('mcp bridge sheet addressing', () => {
     return {
       hasWorkbook: () => true,
       context: () => ({}),
+      readSheetMeta: () => undefined,
       readCells: () => ({}),
-      readRange: () => ({}),
+      readRange: () => rangePage(),
       findCells: () => ({ matches: [], truncated: false, incompleteSheets: [] }),
+      readRangeFormats: () => formatsPage(),
       sheets: () => SHEETS,
       focusSheet: vi.fn(),
       applyOps: vi.fn().mockResolvedValue({ ok: true }),
@@ -329,7 +351,7 @@ describe('mcp bridge sheet addressing', () => {
   })
 
   it('routes a named A1 range to the range reader with its paging option', async () => {
-    const readRange = vi.fn().mockReturnValue({ rows: [], rowsTotal: 0 })
+    const readRange = vi.fn().mockReturnValue(rangePage())
     const { reply } = await send(
       'read_sheet',
       { sheet: 'Data 2024', range: 'A1:D20', maxRows: 5 },

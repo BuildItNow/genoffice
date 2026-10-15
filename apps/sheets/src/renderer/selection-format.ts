@@ -1,5 +1,6 @@
 import { BaselineOffset, BooleanNumber, type IStyleData, WrapStrategy } from '@univerjs/core'
 
+import type { CellFormatState } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import { isAccountingPattern } from './numfmt-dialog'
 
 /// One OOXML indent step rendered as left cell padding, in px — roughly the
@@ -106,6 +107,39 @@ export function toSelectionFormat(
     numberFormat: numberFormat || 'General',
     link,
   }
+}
+
+/// The compact, wire-facing view of a cell's explicit formatting: only the
+/// properties actually set appear, so an unstyled cell yields `{}` (and callers
+/// omit it). Shared by the AI's read_formats and the daemon's format read so a
+/// cell is described identically wherever it is reported.
+export function formatStateOf(echo: SelectionFormat): CellFormatState {
+  const format: Record<string, unknown> = {}
+  if (echo.bold) format.bold = true
+  if (echo.italic) format.italic = true
+  if (echo.underline) format.underline = true
+  if (echo.strike) format.strikethrough = true
+  if (echo.fontFamily) format.fontFamily = echo.fontFamily
+  if (echo.fontSize) format.fontSize = echo.fontSize
+  if (echo.fontColor) format.fontColor = echo.fontColor
+  if (echo.fillColor) format.fillColor = echo.fillColor
+  if (echo.numberFormat && echo.numberFormat !== 'General') format.numberFormat = echo.numberFormat
+  if (
+    echo.horizontalAlignment === 'left' ||
+    echo.horizontalAlignment === 'center' ||
+    echo.horizontalAlignment === 'right'
+  ) {
+    format.horizontalAlign = echo.horizontalAlignment
+  }
+  if (
+    echo.verticalAlignment === 'top' ||
+    echo.verticalAlignment === 'center' ||
+    echo.verticalAlignment === 'bottom'
+  ) {
+    format.verticalAlign = echo.verticalAlignment
+  }
+  if (echo.wrap) format.wrapText = true
+  return format as CellFormatState
 }
 
 export function selectionFormatEquals(
