@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppUnavailableError, AppUpstream } from '../src/upstream'
 
 /**
- * The upstream connection is exercised with the app's control socket, the app
- * launcher, and the SDK client/transport all stubbed, so the tests pin down the
- * daemon's own behaviour: how it discovers the app's MCP port, when it starts
- * the app, how it reports failures, and how it retries a dead connection.
+ * The daemon's connection to the app is exercised with the app's control socket
+ * and the launcher stubbed, so the tests pin down the daemon's own behaviour:
+ * how it reaches the app over the control socket, when it starts the app, and
+ * how it reports failures.
  */
 
 const h = vi.hoisted(() => ({
@@ -16,17 +16,13 @@ const h = vi.hoisted(() => ({
   waitCalls: [] as number[],
   spawnCalls: [] as Array<{ env: NodeJS.ProcessEnv; path?: string }>,
   spawnThrows: null as Error | null,
-  connectThrows: null as Error | null,
-  callToolImpl: null as ((params: unknown) => unknown) | null,
-  callToolCalls: [] as Array<{ name: string }>,
-  clients: [] as any[],
-  closed: [] as any[],
-  transportUrls: [] as string[],
+  requests: [] as Array<{ cmd: string; tool: string; args: Record<string, unknown> }>,
 }))
 
 vi.mock('@genoffice/cli/control', () => ({
   controlEndpoint: vi.fn(() => h.endpoint),
-  controlRequest: vi.fn(async () => {
+  controlRequest: vi.fn(async (_endpoint: unknown, req: unknown) => {
+    h.requests.push(req as { cmd: string; tool: string; args: Record<string, unknown> })
     if (h.controlThrows) throw h.controlThrows
     return h.controlReply
   }),
@@ -41,30 +37,6 @@ vi.mock('@genoffice/cli/app-launch', () => ({
     h.spawnCalls.push(opts)
     if (h.spawnThrows) throw h.spawnThrows
     return 'genoffice'
-  }),
-}))
-
-vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: vi.fn(function (this: any, url: URL) {
-    h.transportUrls.push(url.toString())
-    this.url = url
-  }),
-}))
-
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
-  Client: vi.fn(function (this: any) {
-    this.connect = vi.fn(async () => {
-      if (h.connectThrows) throw h.connectThrows
-    })
-    this.callTool = vi.fn(async (params: any) => {
-      h.callToolCalls.push(params)
-      if (h.callToolImpl) return h.callToolImpl(params)
-      return { content: [{ type: 'text', text: 'ok' }] }
-    })
-    this.close = vi.fn(async () => {
-      h.closed.push(this)
-    })
-    h.clients.push(this)
   }),
 }))
 
@@ -83,82 +55,41 @@ beforeEach(() => {
   h.waitCalls = []
   h.spawnCalls = []
   h.spawnThrows = null
-  h.connectThrows = null
-  h.callToolImpl = null
-  h.callToolCalls = []
-  h.clients = []
-  h.closed = []
-  h.transportUrls = []
+  h.requests = []
 })
 
-describe('AppUpstream.call', () => {
-  it('forwards the bare upstream name to the app and returns its result', async () => {
+describe('AppUpstream.callOffice', () => {
+  it('sends the bare tool name and its args over the control socket', async () => {
     h.endpoint = live
-    h.controlReply = { running: true, port: 3093 }
-    const result = await upstream().call('open_in_genoffice', { path: '/a.docx' })
-    expect(h.callToolCalls[0]).toMatchObject({ name: 'open_in_genoffice', arguments: { path: '/a.docx' } })
-    expect(result.content[0]).toMatchObject({ text: 'ok' })
-    expect(h.transportUrls[0]).toBe('http://127.0.0.1:3093/mcp')
+    h.controlReply = { tabs: [] }
+    const result = await upstream().callOffice('list', {})
+    expect(h.requests[0]).toMatchObject({ tool: 'list', args: {} })
+    expect(result).toEqual({ tabs: [] })
+    // an app that is already up is used as-is, with no launch
+    expect(h.spawnCalls).toHaveLength(0)
   })
 
-  it('starts the app when none is running, forcing its MCP server on', async () => {
+  it('starts the app when none is running, without forcing its MCP server on', async () => {
     h.endpointAfterWait = live
-    h.controlReply = { running: true, port: 3093 }
-    await upstream().call('open_documents', { action: 'list' })
+    h.controlReply = { tabs: [] }
+    await upstream().callOffice('list', {})
     expect(h.spawnCalls).toHaveLength(1)
-    expect(h.spawnCalls[0].env.GENOFFICE_MCP_FORCE).toBe('1')
+    // the app is brought up for the control socket only; its built-in MCP server
+    // stays whatever the Settings switch says
+    expect(h.spawnCalls[0]!.env.GENOFFICE_MCP_FORCE).toBeUndefined()
     expect(h.waitCalls).toEqual([1000])
-    expect(h.callToolCalls[0].name).toBe('open_documents')
+    expect(h.requests[0]).toMatchObject({ tool: 'list' })
   })
 
   it('fails when the app it launched never comes up', async () => {
     h.endpointAfterWait = null
-    await expect(upstream().call('open_documents', {})).rejects.toBeInstanceOf(AppUnavailableError)
+    await expect(upstream().callOffice('list', {})).rejects.toBeInstanceOf(AppUnavailableError)
     expect(h.spawnCalls).toHaveLength(1)
   })
 
-  it('fails when the app is up but its MCP server is off', async () => {
-    h.endpoint = live
-    h.controlReply = { running: false, port: 0 }
-    await expect(upstream().call('open_documents', {})).rejects.toThrow(/Settings ▸ Integrations/)
-  })
-
-  it('fails when the control socket cannot report the MCP endpoint', async () => {
+  it('names the tool when the control socket rejects the call', async () => {
     h.endpoint = live
     h.controlThrows = new Error('socket closed')
-    await expect(upstream().call('open_documents', {})).rejects.toThrow(/did not report its MCP endpoint/)
-  })
-
-  it('fails when the transport refuses the connection', async () => {
-    h.endpoint = live
-    h.controlReply = { running: true, port: 3093 }
-    h.connectThrows = new Error('ECONNREFUSED')
-    await expect(upstream().call('open_documents', {})).rejects.toThrow(/could not connect/)
-  })
-
-  it('retries once against a fresh connection when a call fails', async () => {
-    h.endpoint = live
-    h.controlReply = { running: true, port: 3093 }
-    let first = true
-    h.callToolImpl = () => {
-      if (first) {
-        first = false
-        throw new Error('transport gone')
-      }
-      return { content: [{ type: 'text', text: 'recovered' }] }
-    }
-    const result = await upstream().call('read_document', {})
-    expect(h.clients).toHaveLength(2)
-    expect(h.closed).toHaveLength(1)
-    expect(result.content[0]).toMatchObject({ text: 'recovered' })
-  })
-
-  it('closes the client on dispose', async () => {
-    h.endpoint = live
-    h.controlReply = { running: true, port: 3093 }
-    const app = upstream()
-    await app.call('read_document', {})
-    app.dispose()
-    expect(h.closed).toHaveLength(1)
+    await expect(upstream().callOffice('sheet_read', {})).rejects.toThrow(/sheet_read/)
   })
 })

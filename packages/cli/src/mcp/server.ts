@@ -91,8 +91,8 @@ export interface RegisterCliToolsOptions {
   compactSchemas?: boolean
   /**
    * Namespace every tool (and guide resource) name with this prefix. The daemon
-   * exposes `office_cli_*` and `office_gui_*` families side by side, so a plain
-   * `genoffice mcp` server leaves it empty.
+   * exposes the CLI tools as the `office_cli_*` family beside its own `office_*`
+   * tools, so a plain `genoffice mcp` server leaves it empty.
    */
   namePrefix?: string
   /**

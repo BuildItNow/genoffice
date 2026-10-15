@@ -6,6 +6,7 @@ import {
   CONTROL_FILE,
   CONTROL_MAX_REQUEST_BYTES,
   CONTROL_PROTOCOL,
+  DAEMON_CMD,
   type ControlEndpoint,
   type ControlEnvelope,
   type ControlReply,
@@ -18,8 +19,9 @@ import {
  * userData (per-user directory, 0600 on POSIX; a per-user named pipe on
  * Windows), every request must carry the random token from userData/control.json
  * (0600), one request per connection, 64 KB cap, and the only commands are "show
- * this spot", "read the selection" and "where does the MCP server listen" —
- * nothing writes a file or runs code from the request.
+ * this spot", "read the selection", "where does the MCP server listen" and the
+ * daemon's own `office` tool calls (routed to an editor tab) — the request never
+ * carries code to run.
  */
 export type ControlHandler = (request: ControlRequest) => Promise<ControlReply>
 
@@ -49,6 +51,9 @@ export function parseEnvelope(line: string): ControlEnvelope | null {
   const req = env.request as Partial<ControlRequest>
   // `mcp` carries no path: it only asks where the built-in MCP server listens
   if (req.cmd === 'mcp') return env as ControlEnvelope
+  // `daemon` carries no path either: `tool` names one daemon tool the shell
+  // routes to the owning tab's renderer
+  if (req.cmd === DAEMON_CMD) return typeof req.tool === 'string' ? (env as ControlEnvelope) : null
   if ((req.cmd !== 'open' && req.cmd !== 'selection') || typeof req.path !== 'string') return null
   return env as ControlEnvelope
 }

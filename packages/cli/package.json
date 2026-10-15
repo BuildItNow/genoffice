@@ -11,6 +11,7 @@
     "./agent-skills": "./src/agent-skills.ts",
     "./mcp-launch": "./src/mcp-launch.ts",
     "./mcp-server": "./src/mcp/server.ts",
+    "./sheet-catalog": "./src/formats/xlsx-catalog.ts",
     "./control-protocol": "./src/control-protocol.ts",
     "./control": "./src/control.ts",
     "./app-launch": "./src/app-launch.ts"

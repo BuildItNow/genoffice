@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { ipcMain, webContents } from 'electron'
-import type { SheetsControl } from './tools/sheets-tools'
+import type { SheetsCommand, SheetsControl } from './tools/sheets-tools'
 
 /**
  * Shell-main half of the MCP → sheets-grid bridge.
@@ -156,7 +156,7 @@ export interface SheetsBridgeDeps {
 export function createSheetsControl(deps: SheetsBridgeDeps): SheetsControl {
   const runCommand = async (
     wcId: number,
-    command: 'apply_ops' | 'read_sheet' | 'search_sheet' | 'save_sheet',
+    command: SheetsCommand,
     payload: unknown,
   ): Promise<unknown> => {
     const wc = webContents.fromId(wcId)

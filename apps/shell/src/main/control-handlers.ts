@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import type { WebContents } from 'electron'
+import { DAEMON_CMD } from '@genoffice/cli/control-protocol'
 import type {
   ControlReply,
   ControlRequest,
@@ -21,6 +22,11 @@ export interface ControlHost {
    * only in tests that never probe for it.
    */
   mcp?: () => { enabled: boolean; running: boolean; port: number }
+  /**
+   * The daemon's own tool channel (the `daemon` control command): run one
+   * `office_*` tool against the live app. Absent in tests that never send one.
+   */
+  daemon?: (tool: string, args: Record<string, unknown>) => Promise<ControlReply>
 }
 
 const TARGET_KIND_BY_TAB: Partial<Record<TabKind, ControlTarget['kind']>> = {
@@ -42,6 +48,12 @@ export function controlHandler(host: ControlHost): (req: ControlRequest) => Prom
     if (req.cmd === 'mcp') {
       if (!host.mcp) return fail('unsupported', 'this build has no built-in MCP server')
       return { ok: true, result: { ...host.mcp() } }
+    }
+    // the daemon's own tool channel: no path either — it names a tool the shell
+    // routes to the owning editor tab
+    if (req.cmd === DAEMON_CMD) {
+      if (!host.daemon) return fail('unsupported', 'this build has no daemon tool channel')
+      return host.daemon(req.tool, req.args ?? {})
     }
     if (!existsSync(req.path)) {
       return fail('file_not_found', `file not found: ${req.path}`)

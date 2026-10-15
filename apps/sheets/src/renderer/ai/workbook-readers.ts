@@ -10,7 +10,7 @@ import { MAX_PATCH_ENTRY_BYTES } from '../../shared/desktop-api'
 import type { InMemoryWorkbookAdapter } from '@genoffice/xlsx-gateway/domain/in-memory-workbook'
 import type { CellFormatState, CellScalar } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import { planFileTableRegistrations } from '../file-tables'
-import { toSelectionFormat } from '../selection-format'
+import { formatStateOf, toSelectionFormat } from '../selection-format'
 import { lazyCellReader } from '../univer-sync'
 import { lazySheetScreenExtent, type LazyWorkbookState, type UniverRuntime } from '../univer-state'
 import type { ActiveSheetInfo, FrozenSelection } from './tools'
@@ -273,33 +273,8 @@ export function readFormats(
       // number-format resolution can fail on never-touched cells; treat as General
     }
     const echo = toSelectionFormat(range.getCellStyleData() ?? {}, pattern)
-    const format: Record<string, unknown> = {}
-    if (echo.bold) format.bold = true
-    if (echo.italic) format.italic = true
-    if (echo.underline) format.underline = true
-    if (echo.strike) format.strikethrough = true
-    if (echo.fontFamily) format.fontFamily = echo.fontFamily
-    if (echo.fontSize) format.fontSize = echo.fontSize
-    if (echo.fontColor) format.fontColor = echo.fontColor
-    if (echo.fillColor) format.fillColor = echo.fillColor
-    if (echo.numberFormat && echo.numberFormat !== 'General')
-      format.numberFormat = echo.numberFormat
-    if (
-      echo.horizontalAlignment === 'left' ||
-      echo.horizontalAlignment === 'center' ||
-      echo.horizontalAlignment === 'right'
-    ) {
-      format.horizontalAlign = echo.horizontalAlignment
-    }
-    if (
-      echo.verticalAlignment === 'top' ||
-      echo.verticalAlignment === 'center' ||
-      echo.verticalAlignment === 'bottom'
-    ) {
-      format.verticalAlign = echo.verticalAlignment
-    }
-    if (echo.wrap) format.wrapText = true
-    if (Object.keys(format).length > 0) result[address] = format as CellFormatState
+    const format = formatStateOf(echo)
+    if (Object.keys(format).length > 0) result[address] = format
   }
   return result
 }

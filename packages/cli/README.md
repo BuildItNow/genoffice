@@ -55,7 +55,7 @@ genoffice mcp --http 3000 [--host 127.0.0.1] [--token secret]   # Streamable HTT
 genoffice mcp --compact-schemas   # advertise ops/cells/data as plain arrays instead of the per-op schema (smaller tools/list; also GENOFFICE_MCP_COMPACT_SCHEMAS=1)
 genoffice mcp install all   # register the stdio server with every coding agent found (or one: claude-code, codex, cursor, gemini, copilot, opencode, windsurf)
 genoffice mcp list          # each agent's MCP config and whether genoffice is registered; `mcp uninstall <agent>` removes the entry
-genoffice daemon [--cli]    # the app-aware MCP server on stdio: drive the open documents (office_gui_*, app started on demand); --cli adds the headless office_cli_* family
+genoffice daemon [--cli]    # the app-aware MCP server on stdio: drive the open documents (office_*, app started on demand); --cli adds the headless office_cli_* family
 ```
 
 Word and Markdown commands run the docs and markdown editors under jsdom (installed once per process, loaded lazily). Those modules are imported from the app renderers by relative path until they move into packages of their own.
@@ -180,12 +180,12 @@ file store.
 
 `genoffice mcp` works on files on disk and never needs the window. `genoffice
 daemon` is the other half: on stdio it serves the tools that drive GenOffice
-itself — the documents the user has open and their live editors, as
-`office_gui_*` (list, read, search and edit what is on screen), starting the
-app on demand when a GUI tool is first called. It is the same server the
-packaged app ships as `Resources/cli/office-daemon.cjs`; the subcommand runs
-that bundle through the `genoffice` already on the PATH, so a client needs no
-second command:
+itself — the documents the user has open and their live editors, as `office_*`
+(list, create, open, close, save; read, search and edit the on-screen
+workbook; read and search PDFs), starting the app on demand when such a tool
+is first called. It is the same server the packaged app ships as
+`Resources/cli/office-daemon.cjs`; the subcommand runs that bundle through the
+`genoffice` already on the PATH, so a client needs no second command:
 
 ```json
 { "mcpServers": { "genoffice": { "command": "genoffice", "args": ["daemon"] } } }
