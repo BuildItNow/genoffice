@@ -110,8 +110,9 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
     name: 'sheet_info',
     description:
       'List the worksheets of the workbook in one tab and which one is active. Returns ' +
-      '{ currentSheetId, sheets: [{ id, name, rows, columns }] } — the sheet ids/names the other ' +
-      'sheet tools address, with each sheet\'s data extent. Call this first to learn them.',
+      '{ currentSheetId, sheets: [{ id, name, rows, columns }], dirty } — the sheet ids/names the ' +
+      "other sheet tools address, with each sheet's data extent, plus `dirty`: true when the " +
+      'workbook has edits not yet saved to disk. Call this first to learn them.',
     shape: { tabId: tabIdField },
     readOnly: true,
   },
@@ -143,14 +144,20 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
     name: 'sheet_read_formats',
     description:
       'Read one worksheet of a tab exactly like sheet_read, but each grid cell carries the cell\'s ' +
-      'explicit formatting — bold/italic/underline/strikethrough, font family/size/color, fill ' +
-      'color, number format, horizontal/vertical alignment and wrap — instead of its value (a cell ' +
-      'with no set format is null, mirroring an empty value). Returns the sheet descriptor (id, ' +
-      'name, data extent, frozen panes) plus `range`: the same { range, rows, merges, rowsShown, ' +
-      'rowsTotal, truncated, note? } shape sheet_read uses for values, minus the formulas key. The ' +
-      'area is paged by rows the same way: a tall range is cut to one call and the range to ' +
-      'continue from is named — pass `maxRows` to bound one call. Address the worksheet by name or ' +
-      'id.',
+      'explicit formatting instead of its value (a cell with no set format is null, mirroring an ' +
+      'empty value):\n' +
+      '- font — bold/italic/underline/strikethrough, family, size, color\n' +
+      '- fill — fill color\n' +
+      '- border — per edge (top, right, bottom, left), an OOXML line-style name with its color\n' +
+      '- alignment — horizontal/vertical, wrap, text rotation, indent\n' +
+      '- number — number format\n' +
+      'Returns the sheet descriptor (id, name, data extent, frozen panes) plus `range`: the same ' +
+      '{ range, rows, merges, rowsShown, rowsTotal, truncated, note? } shape sheet_read uses for ' +
+      'values, minus the formulas key. The area is paged by rows the same way: a tall range is cut ' +
+      'to one call and the range to continue from is named — pass `maxRows` to bound one call. ' +
+      '`category` picks which of these groups to read (combine several, e.g. ["font","border"]); it ' +
+      'defaults to the common ["font","fill","alignment","number"] set — pass ["all"] to include ' +
+      'the per-edge borders too. Address the worksheet by name or id.',
     shape: {
       tabId: tabIdField,
       sheetId: sheetIdField,
@@ -161,6 +168,11 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
         .positive()
         .optional()
         .describe('page the area: stop after this many rows and report the range to continue from'),
+      category: z
+        .array(z.enum(['font', 'fill', 'border', 'alignment', 'number', 'all']))
+        .min(1)
+        .default(['font', 'fill', 'alignment', 'number'])
+        .describe('which Format Cells groups to read'),
     },
     readOnly: true,
   },

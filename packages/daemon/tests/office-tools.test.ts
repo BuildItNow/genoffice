@@ -203,4 +203,22 @@ describe('office tool table', () => {
     expect(formats.safeParse({ tabId: 't', range: 'A1:D20' }).success).toBe(true)
     expect(z.object(byName.get('sheet_read')!.shape).safeParse({ tabId: 't' }).success).toBe(true)
   })
+
+  it('scopes sheet_read_formats by a combinable category list, defaulting to the common groups', () => {
+    const formats = z.object(OFFICE_TOOLS.find((t) => t.name === 'sheet_read_formats')!.shape)
+    // an omitted category defaults to the common groups, leaving the per-edge border opt-in
+    expect(formats.parse({ tabId: 't', range: 'A1:D20' }).category).toEqual([
+      'font',
+      'fill',
+      'alignment',
+      'number',
+    ])
+    // several groups combine, and `all` is available for the whole cell
+    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['font', 'border'] }).success).toBe(true)
+    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['all'] }).success).toBe(true)
+    // an empty list reads nothing, so it is refused
+    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: [] }).success).toBe(false)
+    // a name outside the enum is refused
+    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['nope'] }).success).toBe(false)
+  })
 })

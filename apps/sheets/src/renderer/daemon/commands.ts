@@ -6,6 +6,7 @@ import {
 } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
 import { normalizeSheetRefs, primaryCellOf, primarySheetId } from '../mcp-sheet-refs'
 import type { McpSheetHandlers } from '../mcp-bridge'
+import { FORMAT_CATEGORIES, type FormatCategory } from './format-state'
 import {
   SHEETS_DAEMON_COMMANDS,
   type DaemonCommandName,
@@ -201,11 +202,15 @@ async function sheetReadFormats(
   const range = asString(payload.range)
   if (range === undefined) throw new Error('office_sheet_read_formats needs a "range"')
   const maxRows = typeof payload.maxRows === 'number' ? payload.maxRows : undefined
-  const formats = (await handlers.readRangeFormats(
-    range,
-    sheetId,
-    maxRows === undefined ? {} : { maxRows },
-  )) as RangeFormatsResult
+  const category = Array.isArray(payload.category)
+    ? payload.category.filter((name): name is FormatCategory =>
+        FORMAT_CATEGORIES.includes(name as FormatCategory),
+      )
+    : []
+  const formats = (await handlers.readRangeFormats(range, sheetId, {
+    ...(maxRows === undefined ? {} : { maxRows }),
+    ...(category.length === 0 ? {} : { category }),
+  })) as RangeFormatsResult
   return { ...meta, range: formats }
 }
 

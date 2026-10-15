@@ -1,8 +1,8 @@
 import type {
   ApplyOutcome,
-  CellFormatState,
   CellScalar,
 } from '@genoffice/xlsx-gateway/domain/workbook.types'
+import type { FormatCategory, ReadCellFormat } from './format-state'
 
 /**
  * The shapes the daemon's `office_sheet_*` commands exchange with the renderer.
@@ -118,6 +118,8 @@ export interface SheetReadFormatsPayload {
   range: string
   /** page a tall area: stop after this many rows */
   maxRows?: number
+  /** narrow each cell to the named Format Cells groups (font/fill/border/alignment/number); omit for the common font/fill/alignment/number set, or pass `all` for the whole cell */
+  category?: FormatCategory[]
 }
 
 /** the renderer's format read (`readSheetRangeFormats`): a per-cell format grid paged by rows */
@@ -127,7 +129,7 @@ export interface RangeFormatsResult {
   /** the sub-range actually returned this call */
   range: string
   /** rows of the sub-range; each cell is the explicit format, `null` when the cell has none */
-  rows: (CellFormatState | null)[][]
+  rows: (ReadCellFormat | null)[][]
   /** the merged areas intersecting this range, as A1 ranges (`[]` when none) */
   merges: string[]
   rowsShown: number

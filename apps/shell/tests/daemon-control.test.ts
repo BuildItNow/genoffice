@@ -82,12 +82,17 @@ describe('office_create', () => {
   it('writes the requested format, then waits for a workbook to mount', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'genoffice-office-create-'))
     const file = join(dir, 'Book1.xlsx')
-    const openSheetsTab = vi.fn()
+    // the blank file is not open yet: findTabByPath only sees the tab once the open ran
+    let opened = false
+    const openSheetsTab = vi.fn(() => {
+      opened = true
+    })
     const runCommand = vi.fn().mockResolvedValue({ id: 'sheet-1' })
     const reply = await control({
       tabManager: tabs({
         openSheetsTab,
-        findTabByPath: () => ({ id: 't1', kind: 'sheets', webContents: { id: 7 } as never }),
+        findTabByPath: () =>
+          opened ? ({ id: 't1', kind: 'sheets', webContents: { id: 7 } as never }) : undefined,
         openDocuments: async () => [tab('t1', 'sheets', file)],
         webContentsForTab: () => ({ id: 7, isDestroyed: () => false }) as never,
       }),
@@ -109,11 +114,16 @@ describe('office_create', () => {
       const dir = mkdtempSync(join(tmpdir(), `genoffice-office-create-${type}-`))
       const file = join(dir, `New.${type}`)
       const runCommand = vi.fn()
-      const open = vi.fn()
+      // not open yet: the tab appears only after the open ran
+      let opened = false
+      const open = vi.fn(() => {
+        opened = true
+      })
       const reply = await control({
         tabManager: tabs({
           ...({ [opener]: open } as Partial<TabManager>),
-          findTabByPath: () => ({ id: 't1', kind, webContents: { id: 9 } as never }),
+          findTabByPath: () =>
+            opened ? ({ id: 't1', kind, webContents: { id: 9 } as never }) : undefined,
           openDocuments: async () => [tab('t1', kind, file)],
           webContentsForTab: () => ({ id: 9, isDestroyed: () => false }) as never,
         }),
@@ -147,10 +157,10 @@ describe('office_open', () => {
       }),
       sheets: { runCommand } as unknown as SheetsControl,
     }).handle('open', { path: file })
-    // the workbook's sheet info rides along with the tab id
+    // the workbook's sheet info (with its unsaved-changes flag) rides along with the tab id
     expect(reply).toEqual({
       ok: true,
-      result: { path: file, tabId: 't1', info: { currentSheetId: 's1', sheets: [] } },
+      result: { path: file, tabId: 't1', info: { currentSheetId: 's1', sheets: [], dirty: false } },
     })
     // an already-open file focuses its tab instead of opening a second copy
     expect(activateTab).toHaveBeenCalledWith('t1')
@@ -191,6 +201,25 @@ describe('office_open', () => {
     const file = tempFile('Book1.xlsx')
     const reply = await control().handle('open', { path: file })
     expect(errorOf(reply).message).toContain('no tab')
+  })
+})
+
+describe('office_sheet_info', () => {
+  it('stamps the tab\'s unsaved-changes flag on the sheet info', async () => {
+    const file = tempFile('Book1.xlsx')
+    const runCommand = vi.fn().mockResolvedValue({ currentSheetId: 's1', sheets: [] })
+    const handle = control({
+      tabManager: tabs({
+        findTabByPath: () => ({ id: 't1', kind: 'sheets', webContents: { id: 7 } as never }),
+        // the tab has edits not yet written to disk
+        openDocuments: async () => [{ ...tab('t1', 'sheets', file), dirty: true }],
+        webContentsForTab: () => ({ id: 7, isDestroyed: () => false }) as never,
+      }),
+      sheets: { runCommand } as unknown as SheetsControl,
+    }).handle
+    const info = resultOf(await handle('sheet_info', { tabId: 't1' }))
+    expect(info).toEqual({ currentSheetId: 's1', sheets: [], dirty: true })
+    expect(runCommand).toHaveBeenCalledWith(7, 'office_sheet_info', {})
   })
 })
 

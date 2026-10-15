@@ -53,6 +53,12 @@ import {
 } from './univer-state'
 import { applyChangePlan, planFromOps, type OpExecutorContext } from './op-executor'
 import { installSheetsMcpBridge, type McpSheetHandlers } from './mcp-bridge'
+import {
+  cellFormatStateOf,
+  DEFAULT_FORMAT_CATEGORIES,
+  type FormatCategory,
+  type ReadCellFormat,
+} from './daemon'
 import type { RangeFormatsResult, RangeReadResult, SheetMeta } from './daemon/types'
 import { renameChartRefsForSheet } from './workbook-ops'
 import {
@@ -180,7 +186,6 @@ import {
 import { moveOutlineEntries, shiftOutlineEntries } from './outline-model'
 import type {
   ApplyOutcome,
-  CellFormatState,
   ChangePlan,
 } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import { createElectronTransport } from './ai/transport'
@@ -476,7 +481,6 @@ import { getLang, t, aiLangDirective } from './i18n/locale'
 import { planStillMatches } from './lazy-plan'
 import { lastSurvivingScreenLine, netAxisDelta, screenToFile } from './view-transform'
 import {
-  formatStateOf,
   selectionFormatEquals,
   toSelectionFormat,
   type SelectionFormat,
@@ -1882,29 +1886,25 @@ export function App({
    * cut and continuation note) so the two reads differ only in what each cell
    * carries: a format state here, a value there (formulas have no counterpart).
    * A cell with no explicit format reads as `null`, mirroring an empty value.
+   * `opts.category` narrows each cell to the named Format Cells groups (default:
+   * the common font/fill/alignment/number set — pass `['all']` for everything),
+   * so a caller can read just the font, or the borders and alignment together.
    */
   async function readSheetRangeFormats(
     rangeSpec: string,
     sheetId: string | undefined,
-    opts: { maxRows?: number },
+    opts: { maxRows?: number; category?: readonly FormatCategory[] },
   ): Promise<RangeFormatsResult> {
-    const page = await planRangeRead(rangeSpec, sheetId, opts.maxRows)
+    const { maxRows, category = DEFAULT_FORMAT_CATEGORIES } = opts
+    const page = await planRangeRead(rangeSpec, sheetId, maxRows)
     const { worksheet, bounds, width, height, rowsShown } = page
-    const rows: (CellFormatState | null)[][] = []
+    const rows: (ReadCellFormat | null)[][] = []
     for (let r = 0; r < rowsShown; r++) {
-      const row: (CellFormatState | null)[] = []
+      const row: (ReadCellFormat | null)[] = []
       for (let c = 0; c < width; c++) {
         const address = formatAddress(bounds.startRow + r, bounds.startColumn + c)
         const cell = worksheet?.getRange(address)
-        let pattern = ''
-        try {
-          pattern = cell?.getNumberFormat() ?? ''
-        } catch {
-          // number-format resolution can fail on never-touched cells; treat as General
-        }
-        const format = cell
-          ? formatStateOf(toSelectionFormat(cell.getCellStyleData() ?? {}, pattern))
-          : undefined
+        const format = cell ? cellFormatStateOf(cell, category) : undefined
         row.push(format && Object.keys(format).length > 0 ? format : null)
       }
       rows.push(row)
