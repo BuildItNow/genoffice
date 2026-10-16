@@ -15,13 +15,12 @@ import {
 
 /**
  * Local request/reply channel for the genoffice CLI (`open --slide`,
- * `selection`) and the MCP daemon (`mcp`). Security model: the socket lives in
+ * `selection`) and the MCP daemon. Security model: the socket lives in
  * userData (per-user directory, 0600 on POSIX; a per-user named pipe on
  * Windows), every request must carry the random token from userData/control.json
  * (0600), one request per connection, 64 KB cap, and the only commands are "show
- * this spot", "read the selection", "where does the MCP server listen" and the
- * daemon's own `office` tool calls (routed to an editor tab) — the request never
- * carries code to run.
+ * this spot", "read the selection" and the daemon's own `office` tool calls
+ * (routed to an editor tab) — the request never carries code to run.
  */
 export type ControlHandler = (request: ControlRequest) => Promise<ControlReply>
 
@@ -49,10 +48,8 @@ export function parseEnvelope(line: string): ControlEnvelope | null {
   const env = raw as Partial<ControlEnvelope>
   if (typeof env.token !== 'string' || !env.request || typeof env.request !== 'object') return null
   const req = env.request as Partial<ControlRequest>
-  // `mcp` carries no path: it only asks where the built-in MCP server listens
-  if (req.cmd === 'mcp') return env as ControlEnvelope
-  // `daemon` carries no path either: `tool` names one daemon tool the shell
-  // routes to the owning tab's renderer
+  // `daemon` carries no path: `tool` names one daemon tool the shell routes to
+  // the owning tab's renderer
   if (req.cmd === DAEMON_CMD) return typeof req.tool === 'string' ? (env as ControlEnvelope) : null
   if ((req.cmd !== 'open' && req.cmd !== 'selection') || typeof req.path !== 'string') return null
   return env as ControlEnvelope

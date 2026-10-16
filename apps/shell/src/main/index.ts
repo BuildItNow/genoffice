@@ -6913,9 +6913,6 @@ app.whenReady().then(async () => {
         if (!activateDetached(id)) tabManager?.activateTab(id)
       },
       findTab: (path) => tabManager?.findTabByPath(path) ?? findDetachedTabByPath(path),
-      // the mcp probe: an out-of-process client asks where the built-in server
-      // is and what it advertises
-      mcp: () => mcpStatus(),
       // the daemon's own office_* channel: routed straight to a tab's renderer,
       // never through the built-in MCP server (see daemon/daemon-control.ts)
       // a getter, not a fixed object: `tabManager` is rebuilt after the last
