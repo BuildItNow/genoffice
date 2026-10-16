@@ -43,16 +43,16 @@ export interface SheetSummary {
 }
 /** office_sheet_info — the file's worksheets and which one is active */
 export interface SheetInfoResult {
-  /** the id of the sheet the view is currently on */
-  currentSheetId: string
+  /** the name of the sheet the view is currently on */
+  current: string
   /** every worksheet in the file, in tab order */
   sheets: SheetSummary[]
 }
 
 /** office_sheet_read — one worksheet's structural report plus, optionally, a range */
 export interface SheetReadPayload {
-  /** worksheet name or id; omitted means the tab's active sheet */
-  sheetId?: string
+  /** worksheet name; omitted means the tab's active sheet */
+  sheet?: string
   /** A1 area to read; omitted returns the structural report alone */
   range?: string
   /** page a tall range: stop after this many rows */
@@ -93,7 +93,6 @@ export interface SheetFreeze {
 
 /** one worksheet distilled to plain data, as the bridge hands it to the commands */
 export interface SheetMeta {
-  /** the sheet's id (the active one when the caller named none) */
   id: string
   name: string
   /** rows in use (the sheet's data extent) */
@@ -112,8 +111,8 @@ export interface SheetReadResult extends SheetMeta {
 
 /** office_sheet_read_formats — the explicit formatting over an A1 area, paged like the value read */
 export interface SheetReadFormatsPayload {
-  /** worksheet name or id; omitted means the tab's active sheet */
-  sheetId?: string
+  /** worksheet name; omitted means the tab's active sheet */
+  sheet?: string
   /** the A1 area whose formatting to read (required) */
   range: string
   /** page a tall area: stop after this many rows */
@@ -148,12 +147,15 @@ export interface SheetReadFormatsResult extends SheetMeta {
 
 /** office_sheet_search — find text across a worksheet (or the whole workbook) */
 export interface SheetSearchPayload {
-  sheetId?: string
+  /** worksheet name; omitted searches every worksheet */
+  sheet?: string
   query: string
   /** scope the search to an A1 area */
   range?: string
   regex?: boolean
   lookIn?: 'values' | 'formulas' | 'both'
+  /** match case-sensitively (default is case-insensitive) */
+  matchCase?: boolean
   maxResults?: number
 }
 export interface SheetSearchMatch {
@@ -174,7 +176,8 @@ export interface SheetSearchResult {
 
 /** office_sheet_edit — a workbook DSL batch applied to one worksheet */
 export interface SheetEditPayload {
-  sheetId?: string
+  /** worksheet name seeded into ops that omit a sheet; omitted means the tab's active sheet */
+  sheet?: string
   /** workbook DSL op objects, A1-addressed */
   ops: unknown[]
   /** plan the batch and report what would change, without modifying the grid */

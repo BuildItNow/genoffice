@@ -104,6 +104,8 @@ export interface FindCellsOptions {
   readonly regex: boolean
   readonly lookIn: 'values' | 'formulas' | 'both'
   readonly errorsOnly: boolean
+  /** match case-sensitively (default is case-insensitive) */
+  readonly matchCase?: boolean | undefined
   readonly sheetId?: string | undefined
   readonly maxResults: number
 }

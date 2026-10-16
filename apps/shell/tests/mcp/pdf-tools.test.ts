@@ -10,6 +10,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { readPdfText } from '../../../pdf/src/main/read-text'
 import { createPdfTools, parsePageList, searchPdfFile } from '../../src/main/mcp/tools/pdf-tools'
+import { readPdfFile, readPdfInfo } from '../../src/main/daemon/pdf-tools'
 
 let dir: string
 let threePages: string
@@ -99,6 +100,70 @@ describe('readPdfText (pdfium extraction)', () => {
     expect(exact.pages[0]!.text).toHaveLength(perPage)
     // no page beyond the budget is reported as an empty-but-readable page
     expect(exact.pages.filter((p) => p.text.length === 0)).toEqual([])
+  })
+})
+
+describe('readPdfInfo', () => {
+  it('reports page count, metadata and the opening pages\' text, as read_pdf previews them', async () => {
+    const { readFileSync } = await import('node:fs')
+    const out = (await readPdfInfo(new Uint8Array(readFileSync(threePages)), { path: threePages })) as {
+      pageCount: number
+      info: { title?: string; author?: string }
+      pages: Array<{ page: number; text: string; hasTextLayer: boolean }>
+    }
+    expect(out.pageCount).toBe(3)
+    expect(out.info.title).toBe('MCP Fixture')
+    expect(out.info.author).toBe('GenOffice Tests')
+    // the opening pages, with the same read text a preview carries
+    expect(out.pages.map((p) => p.page)).toEqual([1, 2, 3])
+    expect(out.pages[0]!.text).toContain('Hello MCP PDF')
+    expect(out.pages[0]!.hasTextLayer).toBe(true)
+    // the scanned stand-in page reports no text layer
+    expect(out.pages[1]).toMatchObject({ chars: 0, hasTextLayer: false })
+    // this document is only 3 pages: nothing left to preview
+    expect(out).not.toHaveProperty('nextPages')
+  })
+
+  it('reports only the opening pages of a long document', async () => {
+    const { readFileSync } = await import('node:fs')
+    const out = (await readPdfInfo(new Uint8Array(readFileSync(manyPages)), { path: manyPages })) as {
+      pageCount: number
+      pages: Array<{ page: number; text: string }>
+    }
+    // the total page count is the whole document, but only the first pages are read
+    expect(out.pageCount).toBe(25)
+    expect(out.pages.map((p) => p.page)).toEqual([1, 2, 3])
+    expect(out.pages[0]!.text).toContain('Page 1')
+  })
+})
+
+describe('daemon readPdfFile (whole-page paging)', () => {
+  it('never splits a page: whole pages up to the cap, the rest deferred', async () => {
+    // six pages of 30k chars: past the 80k cap only by whole pages
+    const wide = join(dir, 'wide-pages.pdf')
+    const doc = await PDFDocument.create()
+    const font = await doc.embedFont(StandardFonts.Helvetica)
+    for (let i = 0; i < 6; i++) {
+      doc.addPage([400, 300]).drawText('A'.repeat(30_000), { x: 5, y: 200, size: 4, font })
+    }
+    await writeFile(wide, await doc.save())
+    const { readFileSync } = await import('node:fs')
+    const bytes = new Uint8Array(readFileSync(wide))
+    // the full text of one page, to compare against the paged read
+    const alone = (await readPdfFile(bytes, { path: wide, pages: '1' })) as {
+      pages: Array<{ text: string }>
+    }
+    const wholeLen = alone.pages[0]!.text.length
+    const out = (await readPdfFile(bytes, { path: wide, pages: '1-6' })) as {
+      pages: Array<{ page: number; text: string }>
+      truncated: boolean
+      nextPages?: string
+    }
+    // two whole pages fit under the cap; page 3 is deferred, not split in
+    expect(out.pages.map((p) => p.page)).toEqual([1, 2])
+    for (const page of out.pages) expect(page.text).toHaveLength(wholeLen)
+    expect(out.truncated).toBe(true)
+    expect(out.nextPages).toBe('3-6')
   })
 })
 
