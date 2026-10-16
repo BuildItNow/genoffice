@@ -18,6 +18,7 @@ import type {
   FolderListing,
   FolderRoot,
   MoveResult,
+  AuthorNameSetting,
   HomeApi,
   RecentEntry,
   RecentPage,
@@ -97,6 +98,14 @@ function normalizeDefaultAppStatus(result: unknown): DefaultAppStatus {
   }
 }
 
+function normalizeAuthorNameSetting(result: unknown): AuthorNameSetting {
+  const r = (result ?? {}) as Partial<AuthorNameSetting>
+  return {
+    value: typeof r.value === 'string' ? r.value : '',
+    fallback: typeof r.fallback === 'string' ? r.fallback : '',
+  }
+}
+
 const homeApi: HomeApi = {
   async recents(query) {
     return asRecentPage(await ipcRenderer.invoke(HOME_CHANNELS.recents, query))
@@ -159,6 +168,9 @@ const homeApi: HomeApi = {
   },
   async kbRead(path, offset) {
     return ipcRenderer.invoke('kb:read', { path, offset })
+  },
+  async kbCreateDocument(request) {
+    return ipcRenderer.invoke('kb:create-document', request)
   },
   async aiGetSettings() {
     return ipcRenderer.invoke('ai:get-settings')
@@ -442,6 +454,12 @@ const homeApi: HomeApi = {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.setAnalyticsEnabled, enabled)
     return result === true
   },
+  async getAuthorName() {
+    return normalizeAuthorNameSetting(await ipcRenderer.invoke(HOME_CHANNELS.getAuthorName))
+  },
+  async setAuthorName(value) {
+    return normalizeAuthorNameSetting(await ipcRenderer.invoke(HOME_CHANNELS.setAuthorName, value))
+  },
   async getAiPanelPrefs() {
     return normalizeAiPanelPrefs(await ipcRenderer.invoke(HOME_CHANNELS.getAiPanelPrefs))
   },
@@ -547,8 +565,12 @@ const homeApi: HomeApi = {
   async getCodexModels(cliPath) {
     return (await ipcRenderer.invoke('ai:codex-models', cliPath)) as CodexModelCatalog
   },
-  async getCustomModels(baseUrl, apiKey) {
-    return (await ipcRenderer.invoke('ai:custom-models', { baseUrl, apiKey })) as CodexModelCatalog
+  async getCustomModels(baseUrl, apiKey, api) {
+    return (await ipcRenderer.invoke('ai:custom-models', {
+      baseUrl,
+      apiKey,
+      ...(api ? { api } : {}),
+    })) as CodexModelCatalog
   },
   async testAiSettings(settings) {
     const result: unknown = await ipcRenderer.invoke('ai:chat', {
@@ -693,6 +715,13 @@ const tabsApi: TabsApi = {
     const listener = () => handler()
     ipcRenderer.on('app:chrome-pressed', listener)
     return () => ipcRenderer.removeListener('app:chrome-pressed', listener)
+  },
+  onStartRename(handler) {
+    const listener = (_event: IpcRendererEvent, id: unknown) => {
+      if (typeof id === 'string') handler(id)
+    }
+    ipcRenderer.on(TABS_CHANNELS.startRename, listener)
+    return () => ipcRenderer.removeListener(TABS_CHANNELS.startRename, listener)
   },
 }
 

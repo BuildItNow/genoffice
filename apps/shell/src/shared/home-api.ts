@@ -1,5 +1,6 @@
 import type {
   AiChatResponse,
+  AiCustomProtocol,
   AiMediaProviderConfig,
   AiMediaProviderId,
   AiMediaProviderMeta,
@@ -51,6 +52,16 @@ export type UiTheme = 'light' | 'dark' | 'system'
 export type DocTheme = 'follow' | 'light' | 'dark'
 
 /** shell-wide AutoSave default for every editor; updatedAt is 0 until first set */
+/** mirrors AUTHOR_NAME_MAX in @genoffice/electron-utils (the renderer cannot import it) */
+export const AUTHOR_NAME_MAX = 120
+
+export interface AuthorNameSetting {
+  /** stored override; '' means "use fallback" */
+  value: string
+  /** the OS account name */
+  fallback: string
+}
+
 export interface AutoSaveDefault {
   on: boolean
   updatedAt: number
@@ -216,6 +227,12 @@ export interface HomeApi {
   kbSearch(query: { q: string; limit?: number }): Promise<KbSearchHit[]>
   /** one page of a corpus file's parsed text (path must be in kbList) */
   kbRead(path: string, offset: number): Promise<KbReadPage>
+  /** write the AI's markdown as a new .md / .docx in the save folder; resolves to its path */
+  kbCreateDocument(request: {
+    title: string
+    format: 'md' | 'docx'
+    content: string
+  }): Promise<{ path: string }>
   /** the user's AI provider settings (shared with every app's panel) */
   aiGetSettings(): Promise<AiSettings>
   /** one streamed model turn over the shared ai:stream handler */
@@ -340,6 +357,10 @@ export interface HomeApi {
   getAnalyticsEnabled(): Promise<boolean>
   /** persist an explicit analytics opt-in or opt-out */
   setAnalyticsEnabled(enabled: boolean): Promise<boolean>
+  /** name on comments and tracked changes; `value` is the stored override ('' = use `fallback`, the OS account) */
+  getAuthorName(): Promise<AuthorNameSetting>
+  /** persist; broadcasts 'app:author-name-changed' (the effective name) to all web contents */
+  setAuthorName(value: string): Promise<AuthorNameSetting>
   /** AI panel text size + chat-input spellcheck (persisted in userData/app-settings.json) */
   getAiPanelPrefs(): Promise<AiPanelPrefs>
   /** merge + persist; broadcasts 'app:ai-panel-prefs-changed' to all web contents */
@@ -385,8 +406,12 @@ export interface HomeApi {
   getAiProviders(): AiCatalogEntry[]
   /** live Codex model catalog discovered through the current or overridden app-server */
   getCodexModels(cliPath?: string): Promise<CodexModelCatalog>
-  /** live model list advertised by a user-hosted OpenAI-compatible endpoint; empty when it cannot answer */
-  getCustomModels(baseUrl: string, apiKey?: string): Promise<CodexModelCatalog>
+  /** live model list advertised by a user-hosted endpoint, probed on the route its declared protocol speaks; empty when it cannot answer */
+  getCustomModels(
+    baseUrl: string,
+    apiKey?: string,
+    api?: AiCustomProtocol,
+  ): Promise<CodexModelCatalog>
   /** one-shot round trip against the given (possibly unsaved) settings — the settings-UI connection test */
   testAiSettings(settings: AiSettings): Promise<AiChatResponse>
   /** image generation / media analysis provider catalog */
@@ -594,6 +619,8 @@ export const HOME_CHANNELS = {
   openMcpLogFile: 'home:open-mcp-log-file',
   getAnalyticsEnabled: 'home:get-analytics-enabled',
   setAnalyticsEnabled: 'home:set-analytics-enabled',
+  getAuthorName: 'home:get-author-name',
+  setAuthorName: 'home:set-author-name',
   getAiPanelPrefs: 'home:get-ai-panel-prefs',
   setAiPanelPrefs: 'home:set-ai-panel-prefs',
   getDefaultSaveDir: 'home:get-default-save-dir',

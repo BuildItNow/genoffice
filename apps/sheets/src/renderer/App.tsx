@@ -67,6 +67,11 @@ import {
   structuralDeleteFormulaErrorSync,
   type PlanContext,
 } from './plan-operations'
+import {
+  registerCellFontAliases,
+  untilCellFontsLoaded,
+  workbookFontFamilies,
+} from './cell-font-fallback'
 import { isNumericIdentifierText } from './cell-warning'
 import { consumePendingUndoCarry, undoStackDepth } from './undo-carry'
 import { createSaveGate, shouldRunSaveTick } from './save-scheduler'
@@ -361,6 +366,7 @@ import { sharedFormulaResolverFor } from './shared-formula-journal'
 import { installCellClipAnchorFix } from './cell-clip-anchor-fix'
 import { installBorderOverflowExclusionFix } from './border-overflow-exclusion'
 import { installCfEmptySheetFastPath } from './cf-empty-fast-path'
+import { installOtherFormulaAnchor } from './other-formula-anchor'
 import { installMergeBorderFix } from './merge-border-fix'
 import { installThickBorderFix } from './thick-border-fix'
 import { installCenterContinuousRender } from './center-continuous'
@@ -1543,7 +1549,7 @@ export function App({
           // Signed-out failures get an inline sign-in button; detected via
           // gsk status rather than matching the localized error text — but only
           // when Genspark is the provider: a BYOK user's error (e.g. their own
-          // provider's rate limit) must not advertise a Genspark sign-in (#1948)
+          // provider's rate limit) must not advertise a Genspark sign-in (genoffice#1948)
           void window.desktopApi
             .aiGskStatus()
             .then((status) => {
@@ -2091,6 +2097,7 @@ export function App({
     installLoadAutoHeightGate()
     installBorderOverflowExclusionFix()
     installCfEmptySheetFastPath()
+    installOtherFormulaAnchor()
     installCellClipAnchorFix()
     // Borders stored on a merged range's main cell must render their edge
     // segments like Excel; stock Univer drops them entirely.
@@ -2295,6 +2302,9 @@ export function App({
       setPendingEdits(journalSize(state.editJournal))
     }
     void window.desktopApi.getUserDisplayName?.().then((name) => threadStore.setAuthor(name))
+    const offAuthorChanged = window.desktopApi.onUserDisplayNameChanged?.((name) =>
+      threadStore.setAuthor(name),
+    )
     // Univer's own UI (rule-management panels, dialogs) follows the app
     // language instead of hard-coded English.
     void applyUniverLocale(runtime, getLang())
@@ -3550,6 +3560,7 @@ export function App({
       unsubscribeCloseSave()
       offThemeChanged?.()
       offDocThemeChanged?.()
+      offAuthorChanged?.()
       undoRedoSub.unsubscribe()
       findRevealDispose()
       gridGrowthDispose()
@@ -4491,6 +4502,7 @@ export function App({
     opts?: { continueChat?: boolean; onInitialRangeLoaded?: () => void },
   ): Promise<boolean> {
     if (!(await commitActiveEditor())) return false
+    await untilCellFontsLoaded(registerCellFontAliases(workbookFontFamilies(opened)))
     if (opts?.continueChat) chatContinuesRef.current = true
     const selected: WorkbookFile = {
       ...opened,

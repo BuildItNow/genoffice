@@ -287,6 +287,8 @@ interface AiPanelProps {
   } | null
   /** false shows only the collapsed rail; the component stays mounted so panel state survives */
   open?: boolean
+  /** the sidebar setting is off: render nothing while collapsed instead of the rail */
+  hideRail?: boolean
   /** expand from the collapsed rail */
   onExpand?: () => void
   onCollapse?: () => void
@@ -390,6 +392,7 @@ export function AiPanel({
   settings,
   preset,
   open = true,
+  hideRail = false,
   onExpand,
   onCollapse,
   onPathChange,
@@ -1538,7 +1541,7 @@ export function AiPanel({
           // Signed-out failures get an inline sign-in button; detected via
           // gsk status rather than matching the localized error text — but only
           // when Genspark is the provider: a BYOK user's error (e.g. their own
-          // provider's rate limit) must not advertise a Genspark sign-in (#1948)
+          // provider's rate limit) must not advertise a Genspark sign-in (genoffice#1948)
           void window.slidesApi
             .aiGskStatus()
             .then((status) => {
@@ -2139,6 +2142,7 @@ export function AiPanel({
 
   // collapsed: rail only — after all hooks, so the instance and its state survive
   if (!open) {
+    if (hideRail) return null
     return (
       <button
         className="ai-rail"
