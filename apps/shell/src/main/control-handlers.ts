@@ -18,11 +18,6 @@ export interface ControlHost {
   /** ms to keep asking a renderer that has not loaded its document yet */
   readyTimeoutMs?: number
   /**
-   * Where the app's built-in MCP server is (the `mcp` control command). Absent
-   * only in tests that never probe for it.
-   */
-  mcp?: () => { enabled: boolean; running: boolean; port: number }
-  /**
    * The daemon's own tool channel (the `daemon` control command): run one
    * `office_*` tool against the live app. Absent in tests that never send one.
    */
@@ -44,12 +39,7 @@ const TARGET_KIND_BY_TAB: Partial<Record<TabKind, ControlTarget['kind']>> = {
  */
 export function controlHandler(host: ControlHost): (req: ControlRequest) => Promise<ControlReply> {
   return async (req) => {
-    // the mcp probe carries no path; it only reports the built-in server's port
-    if (req.cmd === 'mcp') {
-      if (!host.mcp) return fail('unsupported', 'this build has no built-in MCP server')
-      return { ok: true, result: { ...host.mcp() } }
-    }
-    // the daemon's own tool channel: no path either — it names a tool the shell
+    // the daemon's own tool channel: no path — it names a tool the shell
     // routes to the owning editor tab
     if (req.cmd === DAEMON_CMD) {
       if (!host.daemon) return fail('unsupported', 'this build has no daemon tool channel')

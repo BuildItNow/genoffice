@@ -40,11 +40,6 @@ export type ControlRequest =
   | { cmd: 'open'; path: string; target?: ControlTarget }
   | { cmd: 'selection'; path: string }
   /**
-   * Where the app's built-in MCP server is listening, so an out-of-process MCP
-   * daemon can reach it. Read-only: answers `{ enabled, running, port }`.
-   */
-  | { cmd: 'mcp' }
-  /**
    * The daemon's own channel into the app, independent of the built-in MCP
    * server: `tool` names one `office_*` tool and `args` its arguments.
    */
