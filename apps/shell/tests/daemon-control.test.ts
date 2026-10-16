@@ -147,7 +147,7 @@ describe('office_open', () => {
   it('opens an existing file, waits for a workbook to mount, and returns its sheets', async () => {
     const file = tempFile('Book1.xlsx')
     const activateTab = vi.fn()
-    const runCommand = vi.fn().mockResolvedValue({ currentSheetId: 's1', sheets: [] })
+    const runCommand = vi.fn().mockResolvedValue({ current: 's1', sheets: [] })
     const reply = await control({
       tabManager: tabs({
         activateTab,
@@ -160,7 +160,7 @@ describe('office_open', () => {
     // the workbook's sheet info (with its unsaved-changes flag) rides along with the tab id
     expect(reply).toEqual({
       ok: true,
-      result: { path: file, tabId: 't1', info: { currentSheetId: 's1', sheets: [], dirty: false } },
+      result: { path: file, tabId: 't1', info: { current: 's1', sheets: [], dirty: false } },
     })
     // an already-open file focuses its tab instead of opening a second copy
     expect(activateTab).toHaveBeenCalledWith('t1')
@@ -180,6 +180,28 @@ describe('office_open', () => {
       sheets: { runCommand } as unknown as SheetsControl,
     }).handle('open', { path: file })
     expect(reply).toEqual({ ok: true, result: { path: file, tabId: 't2' } })
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  it('hands a PDF tab its descriptor, read straight from the file', async () => {
+    const file = await pdfFile('report.pdf', 'Hello open PDF')
+    const runCommand = vi.fn()
+    const result = resultOf(
+      await control({
+        tabManager: tabs({
+          findTabByPath: () => ({ id: 'p1', kind: 'pdf', webContents: { id: 9 } as never }),
+          openDocuments: async () => [tab('p1', 'pdf', file)],
+        }),
+        sheets: { runCommand } as unknown as SheetsControl,
+      }).handle('open', { path: file }),
+    )
+    // the PDF's page count/metadata/preview rides along with the tab id
+    expect(result.path).toBe(file)
+    expect(result.tabId).toBe('p1')
+    const info = result.info as { pageCount: number; pages: Array<{ text: string }> }
+    expect(info.pageCount).toBe(1)
+    expect(info.pages[0]!.text).toContain('Hello open PDF')
+    // the PDF is read in-process: the sheets bridge is never touched
     expect(runCommand).not.toHaveBeenCalled()
   })
 
@@ -207,7 +229,7 @@ describe('office_open', () => {
 describe('office_sheet_info', () => {
   it('stamps the tab\'s unsaved-changes flag on the sheet info', async () => {
     const file = tempFile('Book1.xlsx')
-    const runCommand = vi.fn().mockResolvedValue({ currentSheetId: 's1', sheets: [] })
+    const runCommand = vi.fn().mockResolvedValue({ current: 's1', sheets: [] })
     const handle = control({
       tabManager: tabs({
         findTabByPath: () => ({ id: 't1', kind: 'sheets', webContents: { id: 7 } as never }),
@@ -218,15 +240,40 @@ describe('office_sheet_info', () => {
       sheets: { runCommand } as unknown as SheetsControl,
     }).handle
     const info = resultOf(await handle('sheet_info', { tabId: 't1' }))
-    expect(info).toEqual({ currentSheetId: 's1', sheets: [], dirty: true })
+    expect(info).toEqual({ current: 's1', sheets: [], dirty: true })
     expect(runCommand).toHaveBeenCalledWith(7, 'office_sheet_info', {})
   })
 })
 
-describe('office_pdf_read / office_pdf_search', () => {
+describe('office_pdf_info / office_pdf_read / office_pdf_search', () => {
+  it('describes a PDF by an absolute path — page count, metadata and the opening pages', async () => {
+    const file = await pdfFile('info.pdf', 'Hello info')
+    const result = resultOf(await control().handle('pdf_info', { path: file }))
+    // the document descriptor: total pages, metadata, and the first page's preview text
+    expect(result.path).toBe(file)
+    expect(result.pageCount).toBe(1)
+    expect(result.info).toBeDefined()
+    const page = (result.pages as Array<{ page: number; text: string; hasTextLayer: boolean }>)[0]!
+    expect(page.page).toBe(1)
+    expect(page.hasTextLayer).toBe(true)
+    expect(page.text).toContain('Hello info')
+  })
+
+  it('describes an open PDF tab by its tabId', async () => {
+    const file = await pdfFile('info-open.pdf', 'Open info')
+    const result = resultOf(
+      await control({
+        tabManager: tabs({ openDocuments: async () => [tab('p1', 'pdf', file)] }),
+      }).handle('pdf_info', { tabId: 'p1' }),
+    )
+    expect(result.path).toBe(file)
+    expect(result.pageCount).toBe(1)
+  })
+
+
   it('reads a PDF by an absolute path, no window needed', async () => {
     const file = await pdfFile('report.pdf', 'Hello PDF')
-    const result = resultOf(await control().handle('pdf_read', { path: file }))
+    const result = resultOf(await control().handle('pdf_read', { path: file, pages: '1' }))
     // the file is read directly (the pdf app is a viewer): path, page count, text
     expect(result.path).toBe(file)
     expect(result.pageCount).toBe(1)
@@ -238,7 +285,7 @@ describe('office_pdf_read / office_pdf_search', () => {
     const result = resultOf(
       await control({
         tabManager: tabs({ openDocuments: async () => [tab('p1', 'pdf', file)] }),
-      }).handle('pdf_read', { tabId: 'p1' }),
+      }).handle('pdf_read', { tabId: 'p1', pages: '1' }),
     )
     expect(result.path).toBe(file)
     expect((result.pages as Array<{ text: string }>)[0]!.text).toContain('Open tab text')
@@ -251,12 +298,17 @@ describe('office_pdf_read / office_pdf_search', () => {
     expect((result.matches as Array<{ page: number }>)[0]!.page).toBe(1)
   })
 
+  it('requires pages to read — the preview is the info tool job', async () => {
+    const file = await pdfFile('needs-pages.pdf', 'Hello PDF')
+    expect(errorOf(await control().handle('pdf_read', { path: file })).message).toContain('pages')
+  })
+
   it('refuses a missing target, a non-PDF path, and an unsaved PDF tab', async () => {
     const handle = control().handle
-    expect(errorOf(await handle('pdf_read', {})).message).toContain('tabId')
-    expect(errorOf(await handle('pdf_read', { path: tempFile('notes.txt') })).message).toContain(
-      'no open tab',
-    )
+    expect(errorOf(await handle('pdf_read', { pages: '1' })).message).toContain('tabId')
+    expect(
+      errorOf(await handle('pdf_read', { path: tempFile('notes.txt'), pages: '1' })).message,
+    ).toContain('no open tab')
     const unsaved = control({
       tabManager: tabs({
         openDocuments: async () => [
@@ -264,7 +316,7 @@ describe('office_pdf_read / office_pdf_search', () => {
         ],
       }),
     })
-    expect(errorOf(await unsaved.handle('pdf_read', { tabId: 'p1' })).message).toContain(
+    expect(errorOf(await unsaved.handle('pdf_read', { tabId: 'p1', pages: '1' })).message).toContain(
       'never been saved',
     )
   })

@@ -55,6 +55,7 @@ describe('daemon server', () => {
     expect(names).toContain('office_open')
     expect(names).toContain('office_sheet_read')
     expect(names).toContain('office_sheet_edit_help')
+    expect(names).toContain('office_pdf_info')
     expect(names).toContain('office_pdf_read')
     expect(names).toContain('office_pdf_search')
 

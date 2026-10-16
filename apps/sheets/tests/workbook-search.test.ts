@@ -64,6 +64,15 @@ describe('findWorkbookCells: demo workbook', () => {
     expect(result.truncated).toBe(false)
   })
 
+  it('matches case-sensitively when matchCase is set', async () => {
+    // 'TOTAL' matches only the uppercase value, not the lowercase one
+    const result = await findWorkbookCells(
+      demoCtx(DEMO_SHEETS),
+      options({ query: 'TOTAL', matchCase: true }),
+    )
+    expect(result.matches.map((m) => `${m.sheetName}!${m.address}`)).toEqual(['Summary!A1'])
+  })
+
   it('restricts matching to formulas when asked', async () => {
     const result = await findWorkbookCells(
       demoCtx(DEMO_SHEETS),

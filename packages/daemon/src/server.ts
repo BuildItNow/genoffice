@@ -52,7 +52,7 @@ function instructions(cli: boolean): string {
     )
   }
   lines.push(
-    `office_* are the daemon's own tools for a live window: office_list (the open tabs), office_create / office_open / office_close / office_save, the per-tab sheet tools (office_sheet_info / office_sheet_read / office_sheet_read_formats / office_sheet_search / office_sheet_edit), and the PDF reads (office_pdf_read / office_pdf_search, addressed by an open tab or an absolute .pdf path). office_sheet_edit_help returns the op reference for office_sheet_edit and needs no app. They reach the app directly over its local control socket, so they never touch the app's built-in MCP server.`,
+    `office_* are the daemon's own tools for a live window: office_list (the open tabs), office_create / office_open / office_close / office_save, the per-tab sheet tools (office_sheet_info / office_sheet_read / office_sheet_read_formats / office_sheet_search / office_sheet_edit), and the PDF tools (office_pdf_info / office_pdf_read / office_pdf_search, addressed by an open tab or an absolute .pdf path). office_sheet_edit_help returns the op reference for office_sheet_edit and needs no app. They reach the app directly over its local control socket, so they never touch the app's built-in MCP server.`,
   )
   return [
     'GenOffice MCP daemon: the GenOffice tools behind one server, so editing survives closing the app.',

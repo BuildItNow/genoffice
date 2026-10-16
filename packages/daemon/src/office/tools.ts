@@ -17,8 +17,8 @@ import { OFFICE_PREFIX } from '../names'
  *
  * list / create / save / close are family-agnostic: they act on a tab whatever
  * it holds. The per-family tools are grouped beside them (the sheet_* set and
- * the pdf_read / pdf_search reads today), and a new family adds its own
- * `*_info` / `*_read` / `*_edit` set.
+ * the pdf_info / pdf_read / pdf_search reads today), and a new family adds its
+ * own `*_info` / `*_read` / `*_edit` set.
  */
 
 export interface OfficeToolSpec {
@@ -36,10 +36,11 @@ export interface OfficeToolSpec {
 }
 
 const tabIdField = z.string().describe('the tab to act on, as an id from office_list')
-const sheetIdField = z
+/** the sheet reference addressed by NAME (ids are session artifacts — see apps/sheets mcp-sheet-refs) */
+const sheetField = z
   .string()
   .optional()
-  .describe('worksheet name or id; default is the tab\'s active sheet')
+  .describe('worksheet name; default is the tab\'s active sheet')
 
 export const OFFICE_TOOLS: OfficeToolSpec[] = [
   {
@@ -110,23 +111,24 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
     name: 'sheet_info',
     description:
       'List the worksheets of the workbook in one tab and which one is active. Returns ' +
-      '{ currentSheetId, sheets: [{ id, name, rows, columns }], dirty } — the sheet ids/names the ' +
-      "other sheet tools address, with each sheet's data extent, plus `dirty`: true when the " +
-      'workbook has edits not yet saved to disk. Call this first to learn them.',
+      '{ current, sheets: [{ id, name, rows, columns }], dirty } — `current` the active sheet ' +
+      "name, `sheets` the sheet names the other sheet tools address with each one's data extent " +
+      '(plus its session `id`), and `dirty`: true when the workbook has edits not yet saved to ' +
+      'disk. Call this first to learn them.',
     shape: { tabId: tabIdField },
     readOnly: true,
   },
   {
     name: 'sheet_read',
     description:
-      'Read one worksheet of a tab: its id, name, data extent (rows/columns) and frozen panes. ' +
-      'Omit `sheetId` to read the sheet the view is currently on. When `range` is given, that A1 ' +
+      'Read one worksheet of a tab: its name, data extent (rows/columns) and frozen panes. ' +
+      'Omit `sheet` to read the sheet the view is currently on. When `range` is given, that A1 ' +
       'area is also returned as a value grid (with formulas keyed by address and the merged ranges ' +
       'touching it); a tall range is paged by rows — pass `maxRows` to bound one call and continue ' +
       'from the range the result names.',
     shape: {
       tabId: tabIdField,
-      sheetId: sheetIdField,
+      sheet: sheetField,
       range: z
         .string()
         .optional()
@@ -151,16 +153,16 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
       '- border — per edge (top, right, bottom, left), an OOXML line-style name with its color\n' +
       '- alignment — horizontal/vertical, wrap, text rotation, indent\n' +
       '- number — number format\n' +
-      'Returns the sheet descriptor (id, name, data extent, frozen panes) plus `range`: the same ' +
+      'Returns the sheet descriptor (name, data extent, frozen panes) plus `range`: the same ' +
       '{ range, rows, merges, rowsShown, rowsTotal, truncated, note? } shape sheet_read uses for ' +
       'values, minus the formulas key. The area is paged by rows the same way: a tall range is cut ' +
       'to one call and the range to continue from is named — pass `maxRows` to bound one call. ' +
       '`category` picks which of these groups to read (combine several, e.g. ["font","border"]); it ' +
       'defaults to the common ["font","fill","alignment","number"] set — pass ["all"] to include ' +
-      'the per-edge borders too. Address the worksheet by name or id.',
+      'the per-edge borders too. Address the worksheet by name.',
     shape: {
       tabId: tabIdField,
-      sheetId: sheetIdField,
+      sheet: sheetField,
       range: z.string().describe('A1 area whose formatting to read, e.g. "A1:D20"'),
       maxRows: z
         .number()
@@ -181,13 +183,13 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
     description:
       'Search inside the workbook of one tab and return every hit addressed the way sheet_read ' +
       'addresses cells — { sheet, address, value, formula? } — so a hit feeds straight into ' +
-      'sheet_read. `range` scopes the search to an A1 area; `sheetId` picks one worksheet (default: ' +
+      'sheet_read. `range` scopes the search to an A1 area; `sheet` picks one worksheet (default: ' +
       'every worksheet). regex treats `query` as a regular expression; lookIn chooses values, ' +
-      'formulas or both (default both). Matching is case-insensitive; maxResults caps the hits ' +
-      '(default 100, max 500).',
+      'formulas or both (default both); matchCase makes the match case-sensitive (default is ' +
+      'case-insensitive); maxResults caps the hits (default 100, max 500).',
     shape: {
       tabId: tabIdField,
-      sheetId: sheetIdField,
+      sheet: sheetField,
       query: z.string().describe('the text to find'),
       range: z.string().optional().describe('scope the search to an A1 area, e.g. "A1:D20"'),
       regex: z.boolean().optional().describe('treat `query` as a regular expression'),
@@ -195,6 +197,7 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
         .enum(['values', 'formulas', 'both'])
         .optional()
         .describe('match values, formulas, or both (default both)'),
+      matchCase: z.boolean().optional().describe('match case (default is case-insensitive)'),
       maxResults: z
         .number()
         .int()
@@ -208,8 +211,10 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
     name: 'sheet_edit',
     description:
       'Apply workbook DSL operations to one worksheet of a tab. `ops` is an array of op objects ' +
-      'addressed by A1; the tab\'s worksheet named by `sheetId` is seeded into ops that omit a ' +
-      'sheet reference. Common ops:\n' +
+      'addressed by A1. Do NOT give each op its own `sheetId`: this call\'s `sheet` (default: the ' +
+      'active sheet) is filled into every op that omits a sheet reference, so you address the ' +
+      'worksheet once, on the call — an op may still override it with its own `sheet`/`sheetId`. ' +
+      'Common ops:\n' +
       '- set_cell {address, value} — write a value (a string starting "=" becomes a formula)\n' +
       '- set_formula {address, formula} — write a formula (must start "=")\n' +
       '- set_range {start|range, values} — write a rectangular block of values\n' +
@@ -222,13 +227,13 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
       '- set_row_height {row, heightPoints, count?} — row height in points\n' +
       '- set_freeze {rows, columns} — freeze panes (0/0 unfreezes)\n' +
       '- sort_range {range, byColumn, order, hasHeader?} — sort a range\n' +
-      'Any op may name its sheet with `sheet`/`sheetId` (default: this tab\'s `sheetId`). For the ' +
-      'other ops and each one\'s exact fields, call office_sheet_edit_help. The target sheet is ' +
-      'brought into view so the user sees the edit. One batch applies as one undo step; a failed ' +
-      'batch changes nothing — pass dryRun to plan and report without modifying the grid.',
+      'For the other ops and each one\'s exact fields, call office_sheet_edit_help. ' +
+      'The target sheet is brought into view so the user sees the edit. One batch applies as one ' +
+      'undo step; a failed batch changes nothing — pass dryRun to plan and report without modifying ' +
+      'the grid.',
     shape: {
       tabId: tabIdField,
-      sheetId: sheetIdField,
+      sheet: sheetField,
       ops: z.array(z.any()).describe('array of workbook DSL op objects (A1-addressed)'),
       dryRun: z
         .boolean()
@@ -270,16 +275,32 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
       }),
   },
   {
+    name: 'pdf_info',
+    description:
+      'Describe a PDF: its total page count and metadata (title/author), plus a preview of the ' +
+      "opening pages' text, each clipped — one call tells you what the document is and how big it " +
+      'is, addressed either by `tabId` (a PDF open in GenOffice right now, see office_list) or by ' +
+      'an absolute `path` to a .pdf on disk that need not be open. A cheap first call before ' +
+      'office_pdf_read (for pages whose text you want in full) or office_pdf_search.',
+    shape: {
+      tabId: z.string().optional().describe('an open PDF tab to describe, as an id from office_list'),
+      path: z
+        .string()
+        .optional()
+        .describe('absolute path to a .pdf file; used when no open tab is named'),
+    },
+    readOnly: true,
+  },
+  {
     name: 'pdf_read',
     description:
-      'Read the text of a PDF, addressed either by `tabId` (a PDF open in GenOffice right now, ' +
-      'see office_list) or by an absolute `path` to a .pdf on disk that need not be open. By ' +
-      "default a preview: page count, metadata (title/author) and the first few pages' text, each " +
-      'clipped with a `…(+N chars)` marker — enough to tell what the document is. Pass `pages` ' +
-      '(e.g. "3" or "1-5,8") to read those pages in full with page size; one call reads at most ' +
-      '20 pages and the result names the `nextPages` to continue from. Text is extracted in ' +
+      'Read the text of specific pages of a PDF (whole pages: as many as fit, with `nextPages` ' +
+      'naming the rest), addressed either by `tabId` (a PDF open in GenOffice right now, see ' +
+      'office_list) or by an absolute `path` to a .pdf on disk that need not be open. `pages` is ' +
+      'required (e.g. "3" or "1-5,8"); one call reads at most 20 pages. Text is extracted in ' +
       'content order, so complex multi-column layouts may scramble the reading order; scanned ' +
-      'pages have no text layer and come back with empty text and hasTextLayer:false.',
+      'pages have no text layer and come back with empty text and hasTextLayer:false. For an ' +
+      'overview of the document first, use office_pdf_info.',
     shape: {
       tabId: z.string().optional().describe('an open PDF tab to read, as an id from office_list'),
       path: z
@@ -288,10 +309,9 @@ export const OFFICE_TOOLS: OfficeToolSpec[] = [
         .describe('absolute path to a .pdf file; used when no open tab is named'),
       pages: z
         .string()
-        .optional()
         .describe(
           '1-based pages to read, e.g. "3" or "1-5,8" (at most 20 per call; pages past the end ' +
-            'are ignored); omit for the preview (first pages, clipped)',
+            'are ignored)',
         ),
     },
     readOnly: true,

@@ -49,11 +49,12 @@ function buildMatcher(
       test: (value) => typeof value === 'string' && ERROR_VALUE_RE.test(value),
     }
   }
+  const matchCase = options.matchCase === true
   let matchText: (text: string) => boolean
   if (options.regex) {
     let pattern: RegExp
     try {
-      pattern = new RegExp(options.query, 'i')
+      pattern = new RegExp(options.query, matchCase ? '' : 'i')
     } catch (error) {
       return {
         ok: false,
@@ -61,6 +62,9 @@ function buildMatcher(
       }
     }
     matchText = (text) => pattern.test(text)
+  } else if (matchCase) {
+    const needle = options.query
+    matchText = (text) => text.includes(needle)
   } else {
     const needle = options.query.toLowerCase()
     matchText = (text) => text.toLowerCase().includes(needle)
@@ -220,7 +224,7 @@ async function findInLazyWorkbook(
           sheetId,
           {
             query: options.query,
-            matchCase: false,
+            matchCase: options.matchCase === true,
             matchEntireCell: false,
             lookIn: options.lookIn === 'formulas' ? 'formulas_only' : options.lookIn,
             wildcards: false,

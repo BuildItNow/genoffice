@@ -49,6 +49,7 @@ describe('office tool table', () => {
       'sheet_read_formats',
       'sheet_search',
       'sheet_edit_help',
+      'pdf_info',
       'pdf_read',
       'pdf_search',
     ]) {
@@ -175,33 +176,46 @@ describe('office tool table', () => {
 
   it('addresses the PDF reads by an open tab or an absolute path, never a required tabId', () => {
     const byName = new Map(OFFICE_TOOLS.map((t) => [t.name, t]))
-    for (const name of ['pdf_read', 'pdf_search']) {
+    for (const name of ['pdf_info', 'pdf_read', 'pdf_search']) {
       expect(byName.get(name)?.shape).toHaveProperty('tabId')
       expect(byName.get(name)?.shape).toHaveProperty('path')
     }
-    // the read needs only its target; either a tab or a path is enough
+    // the info needs only its target; either a tab or a path is enough
+    const info = z.object(byName.get('pdf_info')!.shape)
+    expect(info.safeParse({ tabId: 't1' }).success).toBe(true)
+    expect(info.safeParse({ path: '/tmp/report.pdf' }).success).toBe(true)
+    // the read needs its target AND the pages to read (the preview is pdf_info's job)
     const read = z.object(byName.get('pdf_read')!.shape)
-    expect(read.safeParse({ tabId: 't1' }).success).toBe(true)
-    expect(read.safeParse({ path: '/tmp/report.pdf' }).success).toBe(true)
+    expect(read.safeParse({ tabId: 't1' }).success).toBe(false)
     expect(read.safeParse({ tabId: 't1', pages: '1-5' }).success).toBe(true)
+    expect(read.safeParse({ path: '/tmp/report.pdf', pages: '3' }).success).toBe(true)
     // the search also needs a query
     const search = z.object(byName.get('pdf_search')!.shape)
     expect(search.safeParse({ path: '/tmp/a.pdf' }).success).toBe(false)
     expect(search.safeParse({ path: '/tmp/a.pdf', query: 'x' }).success).toBe(true)
   })
 
-  it('defaults sheetId and scopes the sheet reads to an optional worksheet', () => {
+  it('addresses the sheet reads by NAME and scopes them to an optional worksheet', () => {
     const byName = new Map(OFFICE_TOOLS.map((t) => [t.name, t]))
     // sheet_info reports the whole workbook; the reads/edits pick a worksheet
     expect(byName.get('sheet_info')?.shape).not.toHaveProperty('sheetId')
+    // the sheet tools address the worksheet by NAME (ids are session artifacts)
     for (const name of ['sheet_read', 'sheet_read_formats', 'sheet_search', 'sheet_edit']) {
-      expect(byName.get(name)?.shape).toHaveProperty('sheetId')
+      expect(byName.get(name)?.shape).toHaveProperty('sheet')
+      expect(byName.get(name)?.shape).not.toHaveProperty('sheetId')
     }
     // sheet_read_formats needs a range; sheet_read does not
     const formats = z.object(byName.get('sheet_read_formats')!.shape)
     expect(formats.safeParse({ tabId: 't' }).success).toBe(false)
     expect(formats.safeParse({ tabId: 't', range: 'A1:D20' }).success).toBe(true)
     expect(z.object(byName.get('sheet_read')!.shape).safeParse({ tabId: 't' }).success).toBe(true)
+  })
+
+  it('lets the search opt into case-sensitive matching', () => {
+    const search = z.object(OFFICE_TOOLS.find((t) => t.name === 'sheet_search')!.shape)
+    // optional, so an omitted flag leaves the default case-insensitive scan
+    expect(search.safeParse({ tabId: 't', query: 'x' }).success).toBe(true)
+    expect(search.safeParse({ tabId: 't', query: 'x', matchCase: true }).success).toBe(true)
   })
 
   it('scopes sheet_read_formats by a combinable category list, defaulting to the common groups', () => {
