@@ -409,11 +409,7 @@ export function applyFormatPatchToRange(
     // 'normal' (confusingly) maps to RIGHT — so a raw 'right' hits its
     // throwing default branch; translate it first (same as the ribbon's align
     // command). null keeps the existing fallback to 'normal'.
-    const align = (patch.horizontalAlign ?? 'normal') as
-      | 'left'
-      | 'center'
-      | 'right'
-      | 'normal'
+    const align = (patch.horizontalAlign ?? 'normal') as 'left' | 'center' | 'right' | 'normal'
     range.setHorizontalAlignment(align === 'right' ? 'normal' : align)
   }
   if (patch.verticalAlign !== undefined) {
