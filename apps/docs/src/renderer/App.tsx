@@ -424,6 +424,7 @@ const WORD_COUNT_THROTTLE_MS = 400
 const MAX_FOLLOW_UP_PASSES = 6
 import { runHeadlessDocumentExport } from './headless-export'
 import { installMcpBridge } from './mcp-bridge'
+import type { DocToolAccessors } from './daemon/commands'
 import {
   clampDocsZoom,
   DOCS_ZOOM_MAX,
@@ -1894,9 +1895,12 @@ export function App() {
 
   // MCP bridge: let an external agent drive this visible editor. Commands arrive
   // from the shell main process and run against the live ctx (refs refresh per render).
+  // The doc-tool accessors (comments / notes / header-footer / page setup / styles)
+  // are filled in further down, once those stores exist for this render.
+  const docToolAccessorsRef = useRef<DocToolAccessors>({})
   useEffect(() => {
     if (tornDown || !editor) return
-    return installMcpBridge({ getCtx: () => fileCtxRef.current })
+    return installMcpBridge({ getCtx: () => fileCtxRef.current, ...docToolAccessorsRef.current })
   }, [tornDown, editor])
 
   // Recompute the document-level line-height factor while editing:
@@ -6696,6 +6700,18 @@ export function App() {
     }),
     [editor],
   )
+
+  // Hand the daemon bridge the same stores the AI panel's tools use, so an
+  // external agent's office_doc_* comment / note / header-footer / page-setup /
+  // style op lands where the user expects. Read live, so a later render's
+  // accessor is what a command sees.
+  docToolAccessorsRef.current = {
+    getComments: () => aiCommentsAccess,
+    getHf: () => aiHfAccess,
+    getPageSetup: () => aiPageSetupAccess,
+    getExtras: () => aiDocExtras,
+    getNotes: () => aiNotesAccess,
+  }
 
   const ribbonActions = useStableCallbacks({
     allocateNumId: (kind: 'bullet' | 'ordered') => allocateListNumId(kind),

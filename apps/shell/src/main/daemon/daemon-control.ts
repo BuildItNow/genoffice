@@ -1,6 +1,7 @@
 import type { ControlReply } from '@genoffice/cli/control-protocol'
 import { createTool, closeTool, listTool, openTool, saveTool } from './document-tools'
 import { runSheet, sheetInfoTool } from './sheets-tools'
+import { docInfoTool, runDoc } from './docs-tools'
 import { pdfInfoTool, pdfReadTool, pdfSearchTool } from './pdf-tools'
 import type { DaemonControlDeps } from './shared'
 
@@ -13,9 +14,10 @@ import type { DaemonControlDeps } from './shared'
  * This module is only the dispatcher: it owns the tool-name switch and the
  * `ControlReply` envelope. The handlers live with their category — the family-
  * agnostic tab/file tools in `./document-tools`, the per-family reads and edits
- * in `./sheets-tools` and `./pdf-tools` — over the deps the shell injects (the
- * tab manager, the sheets renderer channel, and the `open_documents` control
- * whose per-family writer/cleanup save and close reuse; see `./shared`).
+ * in `./sheets-tools`, `./docs-tools` and `./pdf-tools` — over the deps the shell
+ * injects (the tab manager, the sheets and docs renderer channels, and the
+ * `open_documents` control whose per-family writer/cleanup save and close reuse;
+ * see `./shared`).
  *
  * The PDF reads (`pdf_info` / `pdf_read` / `pdf_search`) run right here instead
  * of in a renderer: pdfium is a main-process WASM module, so a PDF is read in
@@ -69,8 +71,17 @@ export function createDaemonControl(getDeps: () => DaemonControlDeps): OfficeCon
             return ok(await runSheet(deps, args, 'office_sheet_read_formats'))
           case 'sheet_search':
             return ok(await runSheet(deps, args, 'office_sheet_search'))
-          case 'sheet_edit':
-            return ok(await runSheet(deps, args, 'office_sheet_edit'))
+          case 'sheet_apply_ops':
+            return ok(await runSheet(deps, args, 'office_sheet_apply_ops'))
+          case 'doc_info':
+            return ok(await docInfoTool(deps, args))
+          case 'doc_read':
+          case 'doc_search':
+          case 'doc_apply_ops':
+          case 'doc_apply_func':
+            // office_doc_apply_func carries the func name in its payload; the
+            // renderer runs it through the same editor tool switch
+            return ok(await runDoc(deps, args, `office_${tool}`))
           case 'pdf_info':
             return ok(await pdfInfoTool(deps, args))
           case 'pdf_read':

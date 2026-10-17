@@ -15,7 +15,7 @@ Usage:
 
 Serves the GenOffice MCP tool surface over stdio. office_* (the daemon's own
 create/open/list/save, the per-tab sheet tools, the PDF reads, and the
-sheet_edit_help op reference, over the app's control socket; the app is started
+sheet_ops_help op reference, over the app's control socket; the app is started
 on demand) is always on. office_cli_* (the headless family, tens of
 tools) is off unless --cli is given; it also takes GENOFFICE_MCP_CLI=1. The
 cloud commands (search, image, media, capabilities) are never served.

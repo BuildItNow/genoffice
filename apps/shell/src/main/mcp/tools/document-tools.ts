@@ -43,7 +43,13 @@ export interface DocToolDeps {
   resolveTarget?: TargetResolver
 }
 
-/** editor commands the docs renderer bridge understands (see docs shared/ipc.ts) */
+/**
+ * The commands the docs renderer bridge accepts for its own session tools.
+ * The daemon's `office_doc_*` names ride the same channel but are *not* listed
+ * here: the daemon handler passes them through with a cast (it builds them from
+ * the daemon tool name), so this union stays the built-in surface's vocabulary.
+ * (see docs shared/ipc.ts)
+ */
 export type McpEditorCommandName =
   | 'insert_content'
   | 'replace_blocks'

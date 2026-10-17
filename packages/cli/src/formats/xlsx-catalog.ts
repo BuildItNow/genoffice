@@ -230,7 +230,7 @@ export function sheetGuideText(group?: string): string {
   return lines.join('\n')
 }
 
-/** One op's reference as the live app's `office_sheet_edit_help` reports it. */
+/** One op's reference as the live app's `office_sheet_ops_help` reports it. */
 export interface SheetOpHelp {
   op: string
   group: string
@@ -240,7 +240,7 @@ export interface SheetOpHelp {
   requiresEditorSession?: string
 }
 
-/** A group's ops by name, as `office_sheet_edit_help` lists them (the "清单"). */
+/** A group's ops by name, as `office_sheet_ops_help` lists them (the "清单"). */
 export interface SheetCategoryHelp {
   name: string
   summary?: string
@@ -260,7 +260,7 @@ export interface SheetHelp {
 }
 
 /**
- * The reference the live app's `office_sheet_edit_help` serves: `list` names categories and
+ * The reference the live app's `office_sheet_ops_help` serves: `list` names categories and
  * returns each one's op names, `ops` names ops and returns each one's signature and note (the
  * same text `guide sheets <op>` prints). Nothing given returns nothing. An unknown name is
  * reported on its own with a suggestion rather than failing the whole call.

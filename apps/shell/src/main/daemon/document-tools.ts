@@ -10,6 +10,7 @@ import type { TabManager } from '../tab-manager'
 import { atomicWriteFile } from '../atomic-write'
 import { asString, listTabs, type DaemonControlDeps } from './shared'
 import { sheetInfoTool } from './sheets-tools'
+import { docInfoTool } from './docs-tools'
 import { pdfInfoTool } from './pdf-tools'
 
 /**
@@ -164,8 +165,9 @@ export async function createTool(
 }
 
 /** office_open: open an existing file in a tab and return its tabId; a workbook
- *  also reports its sheet info, and a PDF its page count/metadata/preview, so
- *  the caller can act without a separate info call */
+ *  also reports its sheet info, a Word document its block outline and text
+ *  stats, and a PDF its page count/metadata/preview, so the caller can act
+ *  without a separate info call */
 export async function openTool(
   deps: DaemonControlDeps,
   args: Record<string, unknown>,
@@ -193,6 +195,21 @@ export async function openTool(
     } catch (error) {
       throw new Error(
         `GenOffice opened ${path} but its spreadsheet did not become ready: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+  // a doc tab is live editor state, so its descriptor is read from the
+  // renderer (which the docs control waits for), reporting the block outline
+  // and text stats without a second office_doc_info call
+  if (doc?.kind === 'docs') {
+    try {
+      const info = await docInfoTool(deps, { tabId })
+      return { path, tabId, info }
+    } catch (error) {
+      throw new Error(
+        `GenOffice opened ${path} but its document did not become ready: ${
           error instanceof Error ? error.message : String(error)
         }`,
       )

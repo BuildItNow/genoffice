@@ -11,6 +11,7 @@ import {
   RESULTS_LIST_CAP,
   type FindOptions,
 } from './editor/find'
+import { dispatchDaemonCommand, type DocToolAccessors } from './daemon/commands'
 import { save, type FileActionContext } from './file-actions'
 
 /**
@@ -24,9 +25,14 @@ import { save, type FileActionContext } from './file-actions'
  *
  * The executors are the built-in agent's own (`executeTool`), so external edits
  * inherit the same parsing, atomicity, formatting rules and stale-index guard.
+ *
+ * The daemon's own `office_doc_*` family rides this same channel; those command
+ * bodies live in `./daemon/commands` (its own self-contained implementation,
+ * kept apart so the daemon surface can evolve without disturbing this bridge's
+ * built-in vocabulary) and are dispatched before the switch below.
  */
 
-export interface McpBridgeDeps {
+export interface McpBridgeDeps extends DocToolAccessors {
   /** live file-action context (refreshed every render by App) */
   getCtx: () => FileActionContext
 }
@@ -155,6 +161,18 @@ async function runCommand(
   const ctx = deps.getCtx()
   const editor = ctx.editor
   if (!editor || !ctx.doc) throw new Error('the document is not ready')
+
+  // The daemon's own `office_doc_*` family rides this same channel; its
+  // implementations live in daemon/commands.ts so this bridge stays transport
+  // for them. It returns `undefined` for a name it does not own — that just
+  // means the switch below handles it. A throw is reported to the caller as
+  // that command's failure.
+  const handled = await dispatchDaemonCommand(
+    command,
+    (payload ?? {}) as Record<string, unknown>,
+    deps,
+  )
+  if (handled !== undefined) return handled
 
   switch (command) {
     case 'insert_content': {

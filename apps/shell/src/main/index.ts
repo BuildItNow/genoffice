@@ -6920,6 +6920,7 @@ app.whenReady().then(async () => {
       daemon: createDaemonControl(() => ({
         tabManager: tabManager ?? null,
         sheets: mcpSheetsControl,
+        docs: mcpDocsControl,
         documents: mcpOpenDocumentsControl,
         // create/open need a window to put their tab in; macOS keeps the app
         // alive with none, so rebuild it rather than fail "no window open"

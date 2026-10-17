@@ -1,7 +1,4 @@
-import type {
-  ApplyOutcome,
-  CellScalar,
-} from '@genoffice/xlsx-gateway/domain/workbook.types'
+import type { ApplyOutcome, CellScalar } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import type { FormatCategory, ReadCellFormat } from './format-state'
 
 /**
@@ -13,22 +10,6 @@ import type { FormatCategory, ReadCellFormat } from './format-state'
  * resolves to; both are grouped here so the dispatcher and its tests share one
  * definition.
  */
-
-/**
- * The daemon command names this family owns. The array is the source of truth
- * (the dispatcher keys its set on it); the type is derived from it, so a new
- * name is added in exactly one place.
- */
-export const SHEETS_DAEMON_COMMANDS = [
-  'office_sheet_info',
-  'office_sheet_read',
-  'office_sheet_read_formats',
-  'office_sheet_search',
-  'office_sheet_edit',
-] as const
-
-/** the daemon `office_sheet_*` command names this family owns */
-export type DaemonCommandName = (typeof SHEETS_DAEMON_COMMANDS)[number]
 
 /** office_sheet_info — no renderer arguments (it reports the whole workbook) */
 export type SheetInfoPayload = Record<string, never>
@@ -174,8 +155,8 @@ export interface SheetSearchResult {
   incompleteSheets?: string[]
 }
 
-/** office_sheet_edit — a workbook DSL batch applied to one worksheet */
-export interface SheetEditPayload {
+/** office_sheet_apply_ops — a workbook DSL batch applied to one worksheet */
+export interface SheetApplyOpsPayload {
   /** worksheet name seeded into ops that omit a sheet; omitted means the tab's active sheet */
   sheet?: string
   /** workbook DSL op objects, A1-addressed */
@@ -183,8 +164,8 @@ export interface SheetEditPayload {
   /** plan the batch and report what would change, without modifying the grid */
   dryRun?: boolean
 }
-/** office_sheet_edit — the apply outcome, plus the plan (dryRun) or settled values */
-export interface SheetEditResult extends ApplyOutcome {
+/** office_sheet_apply_ops — the apply outcome, plus the plan (dryRun) or settled values */
+export interface SheetApplyOpsResult extends ApplyOutcome {
   readonly dryRun?: boolean
   readonly structuralChanges?: readonly string[]
   readonly formatChanges?: readonly string[]
@@ -197,8 +178,4 @@ export interface SheetEditResult extends ApplyOutcome {
 
 /** what a daemon command resolves to; `undefined` means the name is not ours */
 export type DaemonCommandResult =
-  | SheetInfoResult
-  | SheetReadResult
-  | SheetReadFormatsResult
-  | SheetSearchResult
-  | SheetEditResult
+  SheetInfoResult | SheetReadResult | SheetReadFormatsResult | SheetSearchResult | SheetApplyOpsResult

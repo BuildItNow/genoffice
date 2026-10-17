@@ -25,7 +25,10 @@ export function registerOfficeTools(server: McpServer, upstream: AppUpstream): v
       async (args): Promise<CallToolResult> => {
         try {
           const call = args as Record<string, unknown>
-          const result = tool.local ? await tool.local(call) : await upstream.callOffice(tool.name, call)
+          const prepared = tool.prepare ? await tool.prepare(call) : call
+          const result = tool.local
+            ? await tool.local(prepared)
+            : await upstream.callOffice(tool.name, prepared)
           return { content: [{ type: 'text', text: JSON.stringify(result) }] }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
