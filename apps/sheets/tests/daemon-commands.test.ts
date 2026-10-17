@@ -6,12 +6,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { McpSheetHandlers } from '../src/renderer/mcp-bridge'
-import type {
-  RangeFormatsResult,
-  RangeReadResult,
-  SheetMeta,
-} from '../src/renderer/daemon/types'
-import { dispatchDaemonCommand, isDaemonCommand } from '../src/renderer/daemon'
+import type { RangeFormatsResult, RangeReadResult, SheetMeta } from '../src/renderer/daemon/types'
+import { dispatchDaemonCommand } from '../src/renderer/daemon'
 import { SHEETLESS_OPS } from '../src/renderer/daemon/sheetless-ops'
 
 const SHEETS = [
@@ -40,7 +36,15 @@ function rangePage(overrides: Partial<RangeReadResult> = {}): RangeReadResult {
 
 /** a minimal format-read result; override the fields a test cares about */
 function formatsPage(overrides: Partial<RangeFormatsResult> = {}): RangeFormatsResult {
-  return { range: 'A1:B2', rows: [], merges: [], rowsShown: 0, rowsTotal: 0, truncated: false, ...overrides }
+  return {
+    range: 'A1:B2',
+    rows: [],
+    merges: [],
+    rowsShown: 0,
+    rowsTotal: 0,
+    truncated: false,
+    ...overrides,
+  }
 }
 
 function handlersWith(overrides: Partial<McpSheetHandlers> = {}): McpSheetHandlers {
@@ -77,24 +81,6 @@ describe('SHEETLESS_OPS', () => {
   })
 })
 
-describe('isDaemonCommand', () => {
-  it('claims the office_sheet_* family and nothing else', () => {
-    for (const name of [
-      'office_sheet_info',
-      'office_sheet_read',
-      'office_sheet_read_formats',
-      'office_sheet_search',
-      'office_sheet_edit',
-    ]) {
-      expect(isDaemonCommand(name)).toBe(true)
-    }
-    // the built-in bridge's own commands stay with it
-    for (const name of ['read_sheet', 'apply_ops', 'save_sheet']) {
-      expect(isDaemonCommand(name)).toBe(false)
-    }
-  })
-})
-
 describe('dispatchDaemonCommand', () => {
   it('returns undefined for a command the family does not own', async () => {
     // the caller's own switch handles such names; the dispatcher stays silent
@@ -108,7 +94,12 @@ describe('dispatchDaemonCommand', () => {
       {},
       handlersWith({
         // the renderer context is wide; the command must narrow it to name/extent
-        context: () => ({ sheetId: 'sheet-1', sheets: SHEETS, selection: 'A1', knownAddresses: ['A1'] }),
+        context: () => ({
+          sheetId: 'sheet-1',
+          sheets: SHEETS,
+          selection: 'A1',
+          knownAddresses: ['A1'],
+        }),
       }),
     )
     expect(result).toEqual({
@@ -240,7 +231,10 @@ describe('dispatchDaemonCommand', () => {
     const readRangeFormats = vi.fn().mockResolvedValue(
       formatsPage({
         range: 'A1:B2',
-        rows: [[{ bold: true }, null], [null, null]],
+        rows: [
+          [{ bold: true }, null],
+          [null, null],
+        ],
         rowsShown: 2,
         rowsTotal: 2,
       }),
@@ -261,7 +255,10 @@ describe('dispatchDaemonCommand', () => {
       freeze: { xSplit: 0, ySplit: 1, startRow: 1, startColumn: 0 },
       range: formatsPage({
         range: 'A1:B2',
-        rows: [[{ bold: true }, null], [null, null]],
+        rows: [
+          [{ bold: true }, null],
+          [null, null],
+        ],
         rowsShown: 2,
         rowsTotal: 2,
       }),
@@ -307,7 +304,9 @@ describe('dispatchDaemonCommand', () => {
       handlersWith({ findCells }),
     )
     // the sheet name resolved to its id, and the scan stays case-insensitive by default
-    expect(findCells).toHaveBeenCalledWith(expect.objectContaining({ sheetId: 'sheet-1', matchCase: false }))
+    expect(findCells).toHaveBeenCalledWith(
+      expect.objectContaining({ sheetId: 'sheet-1', matchCase: false }),
+    )
     expect(result).toEqual({
       total: 1,
       matches: [{ sheet: 'Summary', address: 'A1', value: 'hit', formula: '=1' }],
@@ -316,7 +315,9 @@ describe('dispatchDaemonCommand', () => {
   })
 
   it('forwards matchCase to the find engine', async () => {
-    const findCells = vi.fn().mockResolvedValue({ matches: [], truncated: false, incompleteSheets: [] })
+    const findCells = vi
+      .fn()
+      .mockResolvedValue({ matches: [], truncated: false, incompleteSheets: [] })
     await dispatchDaemonCommand(
       'office_sheet_search',
       { tabId: 't', query: 'Hit', matchCase: true },
@@ -326,7 +327,9 @@ describe('dispatchDaemonCommand', () => {
   })
 
   it('searches every worksheet when no sheet is named', async () => {
-    const findCells = vi.fn().mockResolvedValue({ matches: [], truncated: false, incompleteSheets: [] })
+    const findCells = vi
+      .fn()
+      .mockResolvedValue({ matches: [], truncated: false, incompleteSheets: [] })
     await dispatchDaemonCommand(
       'office_sheet_search',
       { tabId: 't', query: 'x' },
@@ -345,7 +348,7 @@ describe('dispatchDaemonCommand', () => {
   it('decides seeding by op name: a sheet-scoped op without an address is seeded, a workbook-level one is not', async () => {
     const applyOps = vi.fn().mockResolvedValue({ ok: true })
     await dispatchDaemonCommand(
-      'office_sheet_edit',
+      'office_sheet_apply_ops',
       {
         tabId: 't',
         sheet: 'Summary',
@@ -370,7 +373,7 @@ describe('dispatchDaemonCommand', () => {
   it('seeds an op whose sheet ref is empty or blank, not only an absent one', async () => {
     const applyOps = vi.fn().mockResolvedValue({ ok: true })
     await dispatchDaemonCommand(
-      'office_sheet_edit',
+      'office_sheet_apply_ops',
       {
         tabId: 't',
         sheet: 'Summary',
@@ -395,7 +398,7 @@ describe('dispatchDaemonCommand', () => {
     const applyOps = vi.fn().mockResolvedValue({ ok: true })
     const focusSheet = vi.fn()
     const result = await dispatchDaemonCommand(
-      'office_sheet_edit',
+      'office_sheet_apply_ops',
       {
         tabId: 't',
         sheet: 'Data 2024',
@@ -422,7 +425,7 @@ describe('dispatchDaemonCommand', () => {
   it('seeds the active sheet into unrefed ops when no sheet is named', async () => {
     const applyOps = vi.fn().mockResolvedValue({ ok: true })
     await dispatchDaemonCommand(
-      'office_sheet_edit',
+      'office_sheet_apply_ops',
       { tabId: 't', ops: [{ op: 'set_cell', address: 'A1', value: 1 }] },
       handlersWith({ applyOps }),
     )
@@ -437,8 +440,13 @@ describe('dispatchDaemonCommand', () => {
     const applyOps = vi.fn().mockResolvedValue({ ok: true, planned: true })
     const focusSheet = vi.fn()
     await dispatchDaemonCommand(
-      'office_sheet_edit',
-      { tabId: 't', sheet: 'Summary', ops: [{ op: 'set_cell', address: 'A1', value: 1 }], dryRun: true },
+      'office_sheet_apply_ops',
+      {
+        tabId: 't',
+        sheet: 'Summary',
+        ops: [{ op: 'set_cell', address: 'A1', value: 1 }],
+        dryRun: true,
+      },
       handlersWith({ applyOps, focusSheet }),
     )
     expect(focusSheet).not.toHaveBeenCalled()
@@ -450,7 +458,7 @@ describe('dispatchDaemonCommand', () => {
 
   it('rejects an empty batch', async () => {
     await expect(
-      dispatchDaemonCommand('office_sheet_edit', { tabId: 't', ops: [] }, handlersWith()),
+      dispatchDaemonCommand('office_sheet_apply_ops', { tabId: 't', ops: [] }, handlersWith()),
     ).rejects.toThrow(/ops/)
   })
 })

@@ -1,5 +1,9 @@
 import { z } from 'zod'
-import { parseAddress, parseRange, type RangeBounds } from '@genoffice/xlsx-gateway/domain/cell-address'
+import {
+  parseAddress,
+  parseRange,
+  type RangeBounds,
+} from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
   describeOperationErrors,
   workbookOperationSchema,
@@ -9,13 +13,11 @@ import type { McpSheetHandlers } from '../mcp-bridge'
 import { FORMAT_CATEGORIES, type FormatCategory } from './format-state'
 import { SHEETLESS_OPS } from './sheetless-ops'
 import {
-  SHEETS_DAEMON_COMMANDS,
-  type DaemonCommandName,
   type DaemonCommandResult,
   type RangeFormatsResult,
   type RangeReadResult,
-  type SheetEditPayload,
-  type SheetEditResult,
+  type SheetApplyOpsPayload,
+  type SheetApplyOpsResult,
   type SheetInfoResult,
   type SheetReadFormatsPayload,
   type SheetReadFormatsResult,
@@ -48,14 +50,6 @@ const SEARCH_MAX_RESULTS = 500
 /** fields an op uses to name its OWN sheet (a source/target ref does not count) */
 const OWN_SHEET_FIELDS = ['sheet', 'sheetId'] as const
 
-/** the daemon command names this module serves (single-sourced in `shared/`) */
-const DAEMON_COMMANDS: ReadonlySet<DaemonCommandName> = new Set(SHEETS_DAEMON_COMMANDS)
-
-/** does `command` belong to the daemon's `office_sheet_*` family? */
-export function isDaemonCommand(command: string): command is DaemonCommandName {
-  return DAEMON_COMMANDS.has(command as DaemonCommandName)
-}
-
 /**
  * Run one daemon command against the live workbook. A name this family does not
  * own is not an error here — the caller's own switch handles it — so it returns
@@ -67,9 +61,10 @@ export async function dispatchDaemonCommand(
   payload: Record<string, unknown>,
   handlers: McpSheetHandlers,
 ): Promise<DaemonCommandResult | undefined> {
-  if (!isDaemonCommand(command)) return undefined
-  // the payload crosses the ipc boundary as an untyped JSON object; each case
-  // reads it through its own payload type (the shape the tool advertised)
+  // A name this family does not own matches no case and falls through to
+  // `undefined` below. The payload crosses the ipc boundary as an untyped JSON
+  // object; each case reads it through its own payload type (the shape the
+  // tool advertised).
   switch (command) {
     case 'office_sheet_info':
       return sheetInfo(handlers)
@@ -79,8 +74,8 @@ export async function dispatchDaemonCommand(
       return sheetReadFormats(payload as unknown as SheetReadFormatsPayload, handlers)
     case 'office_sheet_search':
       return sheetSearch(payload as unknown as SheetSearchPayload, handlers)
-    case 'office_sheet_edit':
-      return sheetEdit(payload as unknown as SheetEditPayload, handlers)
+    case 'office_sheet_apply_ops':
+      return sheetApplyOps(payload as unknown as SheetApplyOpsPayload, handlers)
   }
 }
 
@@ -148,7 +143,10 @@ function activeSheetId(handlers: McpSheetHandlers): string | undefined {
  * space-sensitive). An empty reference means the sheet the view is on; a name
  * that matches no sheet fails loudly instead of addressing the wrong one.
  */
-function resolveSheetRef(sheet: string | undefined, handlers: McpSheetHandlers): string | undefined {
+function resolveSheetRef(
+  sheet: string | undefined,
+  handlers: McpSheetHandlers,
+): string | undefined {
   if (sheet === undefined || sheet === '') return activeSheetId(handlers)
   const sheets = handlers.sheets()
   const match = sheets.find((candidate) => candidate.name === sheet)
@@ -265,7 +263,7 @@ async function sheetSearch(
 
 /**
  * Seed a default sheet into the ops that are scoped to a worksheet but name none
- * of their own, so `office_sheet_edit(tabId, sheet, ops)` need not repeat the
+ * of their own, so `office_sheet_apply_ops(tabId, sheet, ops)` need not repeat the
  * sheet on every op. Whether an op takes a sheet is decided by its NAME against
  * the DSL schema (`SHEETLESS_OPS`), not by whether it happens to carry a cell
  * address — a sheet-scoped op like set_freeze is seeded, a workbook-level op like
@@ -289,16 +287,17 @@ function seedSheetId(op: unknown, sheetId: string): unknown {
 }
 
 /** Apply a workbook DSL batch to the visible grid, addressed by the named sheet. */
-async function sheetEdit(
-  payload: SheetEditPayload,
+async function sheetApplyOps(
+  payload: SheetApplyOpsPayload,
   handlers: McpSheetHandlers,
-): Promise<SheetEditResult> {
+): Promise<SheetApplyOpsResult> {
   const ops = Array.isArray(payload.ops) ? payload.ops : []
   if (ops.length === 0) throw new Error('ops must be a non-empty array')
   // the seeded sheet follows `sheet`'s semantics — the named one, or the tab's
   // active sheet when it is omitted — resolved here to the id the ops take
   const defaultSheetId = resolveSheetRef(payload.sheet, handlers)
-  const seeded = defaultSheetId === undefined ? ops : ops.map((op) => seedSheetId(op, defaultSheetId))
+  const seeded =
+    defaultSheetId === undefined ? ops : ops.map((op) => seedSheetId(op, defaultSheetId))
   const named = normalizeSheetRefs(seeded, handlers.sheets())
   if (!named.ok) throw new Error(named.error)
   const parsed = z.array(workbookOperationSchema).safeParse(named.ops)
@@ -310,5 +309,5 @@ async function sheetEdit(
   const outcome =
     result && typeof result === 'object' ? (result as { ok?: boolean; reason?: string }) : undefined
   if (outcome?.ok === false) throw new Error(outcome.reason ?? 'the batch could not be applied')
-  return result as SheetEditResult
+  return result as SheetApplyOpsResult
 }

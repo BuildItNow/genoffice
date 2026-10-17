@@ -48,14 +48,27 @@ describe('office tool table', () => {
       'sheet_read',
       'sheet_read_formats',
       'sheet_search',
-      'sheet_edit_help',
+      'sheet_ops_help',
+      'doc_info',
+      'doc_read',
+      'doc_search',
+      'doc_ops_help',
+      'doc_func_help',
       'pdf_info',
       'pdf_read',
       'pdf_search',
     ]) {
       expect(byName.get(name)?.readOnly).toBe(true)
     }
-    for (const name of ['create', 'open', 'close', 'save', 'sheet_edit']) {
+    for (const name of [
+      'create',
+      'open',
+      'close',
+      'save',
+      'sheet_apply_ops',
+      'doc_apply_ops',
+      'doc_apply_func',
+    ]) {
       expect(byName.get(name)?.readOnly).not.toBe(true)
     }
   })
@@ -75,23 +88,47 @@ describe('office tool table', () => {
       true,
     )
     // the op reference is static metadata; it names categories/ops, not a tab
-    expect(byName.get('sheet_edit_help')?.shape).not.toHaveProperty('tabId')
-    expect(byName.get('sheet_edit_help')?.shape).toHaveProperty('list')
-    expect(byName.get('sheet_edit_help')?.shape).toHaveProperty('ops')
+    expect(byName.get('sheet_ops_help')?.shape).not.toHaveProperty('tabId')
+    expect(byName.get('sheet_ops_help')?.shape).toHaveProperty('list')
+    expect(byName.get('sheet_ops_help')?.shape).toHaveProperty('ops')
     // both are optional: no arguments lists every category
-    const helpSchema = z.object(byName.get('sheet_edit_help')!.shape)
+    const helpSchema = z.object(byName.get('sheet_ops_help')!.shape)
     expect(helpSchema.safeParse({}).success).toBe(true)
     expect(helpSchema.safeParse({ ops: ['set_cell'] }).success).toBe(true)
     expect(helpSchema.safeParse({ list: ['format'], ops: ['format_range'] }).success).toBe(true)
+    // the doc op reference is static metadata too: categories/ops, not a tab
+    expect(byName.get('doc_ops_help')?.shape).not.toHaveProperty('tabId')
+    expect(byName.get('doc_ops_help')?.shape).toHaveProperty('list')
+    expect(byName.get('doc_ops_help')?.shape).toHaveProperty('ops')
+    const docHelpSchema = z.object(byName.get('doc_ops_help')!.shape)
+    expect(docHelpSchema.safeParse({}).success).toBe(true)
+    expect(docHelpSchema.safeParse({ ops: ['setFont'] }).success).toBe(true)
+    // the func reference is static metadata too: func names, not a tab
+    expect(byName.get('doc_func_help')?.shape).not.toHaveProperty('tabId')
+    expect(byName.get('doc_func_help')?.shape).toHaveProperty('funcs')
+    expect(z.object(byName.get('doc_func_help')!.shape).safeParse({}).success).toBe(true)
     // everything else acts on a live tab
-    for (const name of ['close', 'save', 'sheet_info', 'sheet_read', 'sheet_read_formats', 'sheet_search', 'sheet_edit']) {
+    for (const name of [
+      'close',
+      'save',
+      'sheet_info',
+      'sheet_read',
+      'sheet_read_formats',
+      'sheet_search',
+      'sheet_apply_ops',
+      'doc_info',
+      'doc_read',
+      'doc_search',
+      'doc_apply_ops',
+      'doc_apply_func',
+    ]) {
       expect(byName.get(name)?.shape).toHaveProperty('tabId')
       expect(z.object(byName.get(name)!.shape).safeParse({}).success).toBe(false)
     }
   })
 
-  it('serves the sheet edit reference in the daemon, with no app', async () => {
-    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_edit_help')!
+  it('serves the sheet ops reference in the daemon, with no app', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_ops_help')!
     expect(help.local).toBeTypeOf('function')
     const result = (await help.local!({ ops: ['format_range', 'set_cell'] })) as {
       categories?: unknown[]
@@ -108,8 +145,8 @@ describe('office tool table', () => {
     expect(result.unknown).toBeUndefined()
   })
 
-  it('lists a category\'s ops by name, and nothing when asked for nothing', async () => {
-    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_edit_help')!
+  it("lists a category's ops by name, and nothing when asked for nothing", async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_ops_help')!
     const one = (await help.local!({ list: ['format'] })) as {
       categories: Array<{ name: string; summary?: string; ops: string[] }>
       ops?: unknown[]
@@ -123,7 +160,7 @@ describe('office tool table', () => {
   })
 
   it('reports an unknown name on its own, with a suggestion, instead of failing', async () => {
-    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_edit_help')!
+    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_ops_help')!
     const result = (await help.local!({ list: ['formt'], ops: ['set_cel'] })) as {
       ops: unknown[]
       unknown: {
@@ -137,12 +174,255 @@ describe('office tool table', () => {
   })
 
   it('flags an op only the live editor can run', async () => {
-    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_edit_help')!
+    const help = OFFICE_TOOLS.find((t) => t.name === 'sheet_ops_help')!
     const result = (await help.local!({ ops: ['add_table_row'] })) as {
       ops: Array<{ op: string; requiresEditorSession?: string }>
     }
     expect(result.ops[0]!.op).toBe('add_table_row')
     expect(result.ops[0]!.requiresEditorSession).toBeTruthy()
+  })
+
+  it('serves the doc block-op reference in the daemon, with no app', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_ops_help')!
+    expect(help.local).toBeTypeOf('function')
+    const result = (await help.local!({ ops: ['setFont', 'setHeadingLevel'] })) as {
+      categories?: unknown[]
+      ops: Array<{ op: string; group: string; signature: string; note?: string }>
+      unknown?: { ops: unknown[] }
+    }
+    expect(result.ops.map((e) => e.op)).toEqual(['setFont', 'setHeadingLevel'])
+    expect(result.ops[0]).toMatchObject({ op: 'setFont', group: 'block' })
+    expect(result.ops[0]!.signature).toContain('target')
+    // the catalog's note rides along
+    expect(result.ops[0]!.note).toContain('run-level style')
+    // only ops were asked for, and every name was known: nothing else comes back
+    expect(result.categories).toBeUndefined()
+    expect(result.unknown).toBeUndefined()
+  })
+
+  it('serves the doc op category index, expanding one category at a time', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_ops_help')!
+    // no arguments ⇒ just the index: names and summaries, no op names
+    const index = (await help.local!({})) as {
+      categories: Array<{ name: string; summary: string; ops?: string[] }>
+    }
+    expect(index.categories.map((c) => c.name)).toEqual([
+      'text',
+      'paragraph',
+      'list',
+      'structure',
+      'table',
+      'field',
+      'picture',
+    ])
+    expect(index.categories.every((c) => c.ops === undefined)).toBe(true)
+    // a named category carries its op names
+    const one = (await help.local!({ list: ['text'] })) as {
+      categories: Array<{ name: string; summary?: string; ops: string[] }>
+      ops?: unknown[]
+    }
+    expect(one.categories).toHaveLength(1)
+    expect(one.categories[0]).toMatchObject({ name: 'text' })
+    expect(one.categories[0]!.ops).toEqual(['setFont', 'setMatchedFont', 'findReplace'])
+    expect(one.ops).toBeUndefined()
+    // a func name is not an apply_ops op: it comes back under unknown
+    const funcAsOp = (await help.local!({ ops: ['insert_image'] })) as {
+      ops: unknown[]
+      unknown?: { ops: Array<{ op: string; suggestion?: string }> }
+    }
+    expect(funcAsOp.ops).toEqual([])
+    expect(funcAsOp.unknown?.ops).toEqual([{ op: 'insert_image' }])
+  })
+
+  it('groups every block op in the catalog exactly once', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_ops_help')!
+    const index = (await help.local!({})) as { categories: Array<{ name: string }> }
+    const listed = (await help.local!({
+      list: index.categories.map((c) => c.name),
+    })) as { categories: Array<{ name: string; ops: string[] }> }
+    const grouped = listed.categories.flatMap((c) => c.ops)
+    // each op appears once across the categories…
+    expect(new Set(grouped).size).toBe(grouped.length)
+    // …and covers exactly what apply_ops can run (the CLI catalog's block group)
+    const { docHelp } = await import('@genoffice/cli/doc-catalog')
+    const catalog = await docHelp({ list: ['block'] })
+    const blockOps = catalog.categories!.find((c) => c.name === 'block')!.ops
+    expect([...grouped].sort()).toEqual([...blockOps].sort())
+  })
+
+  it('reports an unknown doc op on its own, with a suggestion', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_ops_help')!
+    const result = (await help.local!({ ops: ['setFnt'] })) as {
+      ops: unknown[]
+      unknown: { ops: Array<{ op: string; suggestion?: string }> }
+    }
+    expect(result.ops).toEqual([])
+    expect(result.unknown.ops).toEqual([{ op: 'setFnt', suggestion: 'setFont' }])
+  })
+
+  it('serves the doc func category index, expanding one tier at a time', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_func_help')!
+    expect(help.local).toBeTypeOf('function')
+    // no arguments ⇒ just the index: names and summaries, no func names, no schemas
+    const index = (await help.local!({})) as {
+      categories: Array<{ name: string; summary: string; funcs?: string[] }>
+      funcs?: unknown[]
+    }
+    expect(index.categories.map((c) => c.name)).toEqual([
+      'content',
+      'layout',
+      'styles',
+      'comments',
+      'notes',
+      'revisions',
+    ])
+    expect(index.categories.every((c) => c.funcs === undefined)).toBe(true)
+    expect(index.funcs).toBeUndefined()
+    // a named category carries its func names, but still no schemas
+    const one = (await help.local!({ list: ['comments'] })) as {
+      categories: Array<{ name: string; summary: string; funcs: string[] }>
+      funcs?: unknown[]
+    }
+    expect(one.categories).toHaveLength(1)
+    expect(one.categories[0]).toMatchObject({ name: 'comments' })
+    expect(one.categories[0]!.funcs).toEqual([
+      'add_comment',
+      'reply_comment',
+      'resolve_comment',
+      'delete_comment',
+      'read_comments',
+    ])
+    expect(one.funcs).toBeUndefined()
+    // named funcs carry their signature with schema and example
+    const detail = (await help.local!({ funcs: ['insert_picture'] })) as {
+      categories?: unknown
+      funcs: Array<{
+        func: string
+        signature: string
+        schema?: { required?: string[] }
+        example?: unknown
+      }>
+      unknown?: unknown
+    }
+    expect(detail.funcs).toHaveLength(1)
+    expect(detail.funcs[0]!.signature).toContain('url')
+    expect(detail.funcs[0]!.schema?.required).toContain('url')
+    expect(detail.categories).toBeUndefined()
+    expect(detail.unknown).toBeUndefined()
+  })
+
+  it('groups every func in the enum exactly once', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_func_help')!
+    const apply = OFFICE_TOOLS.find((t) => t.name === 'doc_apply_func')!
+    const funcNames = (apply.shape.func as unknown as { options: string[] }).options
+    const index = (await help.local!({})) as { categories: Array<{ name: string }> }
+    const listed = (await help.local!({
+      list: index.categories.map((c) => c.name),
+    })) as { categories: Array<{ name: string; funcs: string[] }> }
+    const grouped = listed.categories.flatMap((c) => c.funcs)
+    expect(new Set(grouped).size).toBe(grouped.length)
+    expect([...grouped].sort()).toEqual([...funcNames].sort())
+    // the op batch is the one doc op that is not a func
+    expect(grouped).not.toContain('apply_ops')
+  })
+
+  it('reports an unknown func and category with suggestions', async () => {
+    const help = OFFICE_TOOLS.find((t) => t.name === 'doc_func_help')!
+    const result = (await help.local!({ list: ['comment'], funcs: ['ad_comment'] })) as {
+      categories: unknown[]
+      funcs: unknown[]
+      unknown: {
+        categories: Array<{ name: string; suggestion?: string }>
+        funcs: Array<{ func: string; suggestion?: string }>
+      }
+    }
+    expect(result.categories).toEqual([])
+    expect(result.funcs).toEqual([])
+    expect(result.unknown.categories).toEqual([{ name: 'comment', suggestion: 'comments' }])
+    expect(result.unknown.funcs).toEqual([{ func: 'ad_comment', suggestion: 'add_comment' }])
+  })
+
+  it('addresses the doc reads by a tabId, and doc_search by a query too', () => {
+    const byName = new Map(OFFICE_TOOLS.map((t) => [t.name, t]))
+    // doc_read's range/full/maxChars/offset are all optional: the overview needs only the tab
+    expect(z.object(byName.get('doc_read')!.shape).safeParse({ tabId: 't' }).success).toBe(true)
+    expect(
+      z.object(byName.get('doc_read')!.shape).safeParse({ tabId: 't', range: '0-2' }).success,
+    ).toBe(true)
+    // doc_search needs the query on top of the tab
+    const search = z.object(byName.get('doc_search')!.shape)
+    expect(search.safeParse({ tabId: 't' }).success).toBe(false)
+    expect(search.safeParse({ tabId: 't', query: 'x' }).success).toBe(true)
+  })
+
+  it('takes a doc apply_ops batch of op objects, with dryRun opt-in', () => {
+    const edit = z.object(OFFICE_TOOLS.find((t) => t.name === 'doc_apply_ops')!.shape)
+    expect(edit.safeParse({ tabId: 't' }).success).toBe(false)
+    const parsed = edit.safeParse({ tabId: 't', ops: [{ op: 'setFont' }] })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.dryRun).toBeUndefined()
+    expect(edit.safeParse({ tabId: 't', ops: [{ op: 'setFont' }], dryRun: true }).success).toBe(
+      true,
+    )
+  })
+
+  it('runs doc funcs through one tool, validating each against its own spec', async () => {
+    const byName = new Map(OFFICE_TOOLS.map((t) => [t.name, t]))
+    // every op tool but the batch is a func, not a tool of its own
+    for (const name of [
+      'doc_insert_content',
+      'doc_replace_blocks',
+      'doc_read_comments',
+      'doc_read_revisions',
+      'doc_read_notes',
+      'doc_list_styles',
+    ]) {
+      expect(byName.has(name)).toBe(false)
+    }
+
+    // one generic entry: args is a free record until prepare() checks the func
+    const apply = byName.get('doc_apply_func')!
+    const schema = z.object(apply.shape)
+    expect(schema.safeParse({ tabId: 't' }).success).toBe(false)
+    expect(schema.safeParse({ tabId: 't', func: 'insert_picture' }).success).toBe(true)
+    expect(schema.safeParse({ tabId: 't', func: 'nope' }).success).toBe(false)
+    const parsed = (await apply.prepare!({
+      tabId: 't',
+      func: 'add_comment',
+      args: { blockIndex: 2, comment: 'why?' },
+    })) as { args: Record<string, unknown> }
+    expect(parsed.args).toEqual({ blockIndex: 2, comment: 'why?' })
+    // the func's own required fields are enforced
+    expect(() =>
+      apply.prepare!({ tabId: 't', func: 'add_comment', args: { blockIndex: 2 } }),
+    ).toThrow(/comment/)
+    // unknown fields are rejected, not silently stripped
+    expect(() =>
+      apply.prepare!({
+        tabId: 't',
+        func: 'add_comment',
+        args: { blockIndex: 2, comment: 'x', body: 'y' },
+      }),
+    ).toThrow(/body/)
+    expect(() => apply.prepare!({ tabId: 't', func: 'nope', args: {} })).toThrow(/unknown func/)
+
+    // the content writes validate their own fields
+    expect(() => apply.prepare!({ tabId: 't', func: 'insert_content', args: {} })).toThrow(/html/)
+    expect(
+      (await apply.prepare!({
+        tabId: 't',
+        func: 'replace_blocks',
+        args: { startBlockIndex: 0, endBlockIndex: 1, html: '<p>x</p>' },
+      })) as { args: Record<string, unknown> },
+    ).toMatchObject({ args: { startBlockIndex: 0, endBlockIndex: 1 } })
+
+    // the pure reads need no fields at all
+    for (const name of ['read_comments', 'read_revisions', 'read_notes', 'list_styles']) {
+      const parsed = (await apply.prepare!({ tabId: 't', func: name })) as {
+        args: Record<string, unknown>
+      }
+      expect(parsed.args).toEqual({})
+    }
   })
 
   it('closes a tab by tabId, with discard defaulting to false', () => {
@@ -200,7 +480,7 @@ describe('office tool table', () => {
     // sheet_info reports the whole workbook; the reads/edits pick a worksheet
     expect(byName.get('sheet_info')?.shape).not.toHaveProperty('sheetId')
     // the sheet tools address the worksheet by NAME (ids are session artifacts)
-    for (const name of ['sheet_read', 'sheet_read_formats', 'sheet_search', 'sheet_edit']) {
+    for (const name of ['sheet_read', 'sheet_read_formats', 'sheet_search', 'sheet_apply_ops']) {
       expect(byName.get(name)?.shape).toHaveProperty('sheet')
       expect(byName.get(name)?.shape).not.toHaveProperty('sheetId')
     }
@@ -228,11 +508,15 @@ describe('office tool table', () => {
       'number',
     ])
     // several groups combine, and `all` is available for the whole cell
-    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['font', 'border'] }).success).toBe(true)
+    expect(
+      formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['font', 'border'] }).success,
+    ).toBe(true)
     expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['all'] }).success).toBe(true)
     // an empty list reads nothing, so it is refused
     expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: [] }).success).toBe(false)
     // a name outside the enum is refused
-    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['nope'] }).success).toBe(false)
+    expect(formats.safeParse({ tabId: 't', range: 'A1:D20', category: ['nope'] }).success).toBe(
+      false,
+    )
   })
 })

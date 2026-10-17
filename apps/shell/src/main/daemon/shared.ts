@@ -1,14 +1,15 @@
 import type { OpenDocumentTab } from '../../shared/tabs-api'
 import type { SheetsControl } from '../mcp/tools/sheets-tools'
+import type { DocsControl } from '../mcp/tools/document-tools'
 import type { OpenDocumentsControl } from '../mcp/tools/open-documents-tools'
 import type { TabManager } from '../tab-manager'
 
 /**
  * What the shell injects for the daemon's `office_*` tools, shared by every
- * per-category tool module (document-tools / sheets-tools / pdf-tools), plus the
- * two helpers those modules need in common: the visible tab list, and a trimmed
- * non-empty string. Kept apart from the dispatcher so no tool module imports
- * daemon-control and the imports stay acyclic.
+ * per-category tool module (document-tools / sheets-tools / docs-tools /
+ * pdf-tools), plus the two helpers those modules need in common: the visible tab
+ * list, and a trimmed non-empty string. Kept apart from the dispatcher so no tool
+ * module imports daemon-control and the imports stay acyclic.
  */
 
 export interface DaemonControlDeps {
@@ -16,6 +17,12 @@ export interface DaemonControlDeps {
   tabManager: TabManager | null
   /** the sheets renderer channel (createSheetsControl in index.ts) */
   sheets: SheetsControl
+  /**
+   * the docs renderer channel (createDocsControl in index.ts): the daemon's
+   * office_doc_* tools ride the same channel the MCP docx session tools use, so a
+   * daemon edit lands in the live editor exactly like an in-app one.
+   */
+  docs: DocsControl
   /**
    * the `open_documents` control (createOpenDocumentsControl in index.ts): save
    * and close reuse its per-family writer/cleanup, so they behave exactly like
