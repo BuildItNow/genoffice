@@ -54,9 +54,7 @@ export function countWords(text: string): number {
  */
 export function selectedWordCount(doc: ProseMirrorNode, selection: Selection): number {
   // the same leaf reader as the total: an inline formula's text counts in both
-  return countWords(
-    doc.textBetween(selection.from, selection.to, ' ', leafTextForWordCount),
-  )
+  return countWords(doc.textBetween(selection.from, selection.to, ' ', leafTextForWordCount))
 }
 
 export function documentTextForWordCount(doc: ProseMirrorNode): string {

@@ -86,7 +86,10 @@ describe('selectedWordCount', () => {
         type: 'docParagraph',
         attrs: { docxIndex: null },
         content: [
-          { type: 'docInlineMath', attrs: { omml: '', mathml: '', latex: 'E=mc^2', text: 'E=mc2' } },
+          {
+            type: 'docInlineMath',
+            attrs: { omml: '', mathml: '', latex: 'E=mc^2', text: 'E=mc2' },
+          },
         ],
       },
     ])
