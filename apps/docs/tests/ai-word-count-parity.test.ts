@@ -89,10 +89,9 @@ describe('AI snapshot word count vs office_doc_info', () => {
     ])
     const docText = documentTextForWordCount(editor.state.doc)
     expect(countWords(docText)).toBe(7)
-    const stats = `Full-text stats: words 7, characters (no spaces) ${docText.replace(
-      /\s/g,
-      '',
-    ).length}, characters (with spaces) ${docText.length}`
+    const stats = `Full-text stats: words 7, characters (no spaces) ${
+      docText.replace(/\s/g, '').length
+    }, characters (with spaces) ${docText.length}`
     expect(buildDocumentContext(editor)).toContain(stats)
   })
 })
