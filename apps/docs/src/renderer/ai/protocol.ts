@@ -12,7 +12,7 @@ import { pmTableToModel, tableModelToPmNode, type PmMark, type PmNode } from '..
 import { equationBlockJson, inlineEquationNodeJson } from '../editor/equation'
 import { inheritFrom, inheritTableFormatting, sameBlockRole } from './inherit-formatting'
 import { TRACK_IGNORE, type RevisionRange } from '../editor/revisions'
-import { countWords, leafTextForWordCount } from '../word-count'
+import { countWords, documentTextForWordCount, leafTextForWordCount } from '../word-count'
 import { blockRangePositions, isTrackedDeleted, liveText } from './doc-utils'
 import {
   modelTextOf,
@@ -178,7 +178,7 @@ export const AGENT_SYSTEM_PROMPT = [
   OPS_GUIDE,
 ].join('\n')
 
-export { countWords }
+export { countWords, documentTextForWordCount }
 
 // ---- selection scope ----
 
